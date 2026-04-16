@@ -183,7 +183,26 @@ swift test
 
 # Check permissions without starting server
 .build/debug/LogicProMCP --check-permissions
+
+# Validate agent framework surfaces
+python3 Scripts/validate_agent_framework.py
+
+# Self-test closeout truth audit
+python3 Scripts/closeout_truth_audit.py --self-test
 ```
+
+## Agent Framework
+
+This repository now includes a minimal agent framework layer aligned with the `music-studio` workspace:
+
+- Project adapter: `.github/instructions/project-context.instructions.md`
+- Agent roles: `.github/agents/`
+- Long-task templates: `templates/`
+- Multi-CLI discussion loop: `templates/discussion_packet.template.md` + `docs/runbooks/multi-cli-discussion-loop.md`
+- Closeout audit: `templates/closeout_receipt.template.md` + `Scripts/closeout_truth_audit.py`
+- Standard local CLI panel: `Codex`, `Claude Code`, `Copilot`, `Gemini`
+- Repo-local state surfaces: `ROADMAP.md`, `session_state.md`
+- Local validation: `python3 Scripts/validate_agent_framework.py`
 
 ### Project Structure
 

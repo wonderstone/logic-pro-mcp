@@ -12,6 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate agent framework surfaces
+        run: python3 Scripts/validate_agent_framework.py
+
+      - name: Self-test closeout truth audit
+        run: python3 Scripts/closeout_truth_audit.py --self-test
+
+      - name: Smoke test discussion packet generator
+        run: python3 Scripts/init_discussion_packet.py --task-id framework-smoke --question "smoke" --stdout > /dev/null
+
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
