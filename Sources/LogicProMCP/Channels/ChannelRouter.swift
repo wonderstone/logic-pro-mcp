@@ -109,6 +109,7 @@ actor ChannelRouter {
         "project.close":              [.cgEvent, .appleScript],
         "project.get_info":           [.accessibility],
         "project.bounce":             [.cgEvent, .accessibility],
+        "project.silent_bounce":      [],  // Handled directly via osascript subprocess
         "project.is_running":         [],  // No channel needed — pure process check
 
         // Views — keyboard toggle
