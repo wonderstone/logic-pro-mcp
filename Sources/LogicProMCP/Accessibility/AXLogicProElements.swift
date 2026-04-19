@@ -49,32 +49,62 @@ enum AXLogicProElements {
 
     // MARK: - Tracks
 
-    /// Find the track header area containing individual track rows.
-    static func getTrackHeaders() -> AXUIElement? {
+    /// Find the container that holds track header items.
+    private static func trackHeaderContainer() -> AXUIElement? {
         guard let window = mainWindow() else { return nil }
-        // Track headers are typically in a scrollable list/table area
+
+        let groups = AXHelpers.findAllDescendants(of: window, role: kAXGroupRole, maxDepth: 8)
+        if let headerGroup = groups.first(where: {
+            (AXHelpers.getDescription($0) ?? "").localizedCaseInsensitiveContains("Tracks header")
+        }) {
+            return headerGroup
+        }
+
         if let area = AXHelpers.findDescendant(of: window, role: kAXListRole, identifier: "Track Headers") {
             return area
         }
-        // Fallback: look for an AXScrollArea containing AXRow or AXGroup children
         if let area = AXHelpers.findDescendant(of: window, role: kAXScrollAreaRole, identifier: "Tracks") {
             return area
         }
         return AXHelpers.findDescendant(of: window, role: kAXOutlineRole, maxDepth: 5)
     }
 
+    /// Find the track header area containing individual track rows.
+    static func getTrackHeaders() -> AXUIElement? {
+        trackHeaderContainer()
+    }
+
     /// Find a track header at a specific index (0-based).
     static func findTrackHeader(at index: Int) -> AXUIElement? {
-        guard let headers = getTrackHeaders() else { return nil }
-        let rows = AXHelpers.getChildren(headers)
-        guard index >= 0 && index < rows.count else { return nil }
-        return rows[index]
+        let headers = allTrackHeaders()
+        guard index >= 0 && index < headers.count else { return nil }
+        return headers[index]
     }
 
     /// Enumerate all track header rows.
     static func allTrackHeaders() -> [AXUIElement] {
-        guard let headers = getTrackHeaders() else { return [] }
-        return AXHelpers.getChildren(headers)
+        guard let container = trackHeaderContainer() else { return [] }
+
+        let directChildren = AXHelpers.getChildren(container)
+        let layoutItems = directChildren.filter { AXHelpers.getRole($0) == "AXLayoutItem" }
+        if !layoutItems.isEmpty {
+            return layoutItems
+        }
+
+        let rowLikeChildren = directChildren.filter {
+            guard let role = AXHelpers.getRole($0) else { return false }
+            return role == kAXRowRole || role == kAXGroupRole
+        }
+        if !rowLikeChildren.isEmpty {
+            return rowLikeChildren
+        }
+
+        let descendantLayoutItems = AXHelpers.findAllDescendants(of: container, role: "AXLayoutItem", maxDepth: 4)
+        if !descendantLayoutItems.isEmpty {
+            return descendantLayoutItems
+        }
+
+        return AXHelpers.findAllDescendants(of: container, role: kAXRowRole, maxDepth: 4)
     }
 
     // MARK: - Mixer

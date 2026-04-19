@@ -62,6 +62,7 @@ actor StatePoller {
 
             if shouldPollTracks {
                 await pollTracks(axChannel: axChannel, cache: cache)
+                await pollProject(axChannel: axChannel, cache: cache)
             }
 
             // Sleep until next poll
@@ -109,6 +110,23 @@ actor StatePoller {
             await cache.updateTracks(tracks)
         } catch {
             Log.debug("Tracks decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollProject(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "project.get_info", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Project poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let info = try decoder.decode(ProjectInfo.self, from: data)
+            await cache.updateProject(info)
+        } catch {
+            Log.debug("Project decode failed: \(error)", subsystem: "poller")
         }
     }
 

@@ -87,11 +87,13 @@ enum AXValueExtractors {
     /// Read a track header and extract its basic state.
     static func extractTrackState(from header: AXUIElement, index: Int) -> TrackState {
         let name = extractTrackName(from: header)
-        let muted = extractTrackButtonState(from: header, prefix: "Mute") ?? false
-        let soloed = extractTrackButtonState(from: header, prefix: "Solo") ?? false
-        let armed = extractTrackButtonState(from: header, prefix: "Record") ?? false
+        let muted = extractTrackToggleState(from: header, prefix: "Mute") ?? false
+        let soloed = extractTrackToggleState(from: header, prefix: "Solo") ?? false
+        let armed = extractTrackToggleState(from: header, prefix: "Record") ?? false
         let selected = extractSelectedState(header) ?? false
         let trackType = inferTrackType(from: header)
+        let pan = extractTrackPan(from: header) ?? 0.0
+        let volume = extractTrackVolume(from: header) ?? 0.0
 
         return TrackState(
             id: index,
@@ -101,8 +103,8 @@ enum AXValueExtractors {
             isSoloed: soloed,
             isArmed: armed,
             isSelected: selected,
-            volume: 0.0,
-            pan: 0.0,
+            volume: volume,
+            pan: pan,
             color: extractTrackColor(from: header)
         )
     }
@@ -157,7 +159,34 @@ enum AXValueExtractors {
 
     // MARK: - Private helpers
 
+    static func parseTrackName(from text: String) -> String? {
+        let pattern = #"[“\"]([^”\"]+)[”\"]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let nameRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        let parsed = String(text[nameRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return parsed.isEmpty ? nil : parsed
+    }
+
     private static func extractTrackName(from header: AXUIElement) -> String {
+        let headerDesc = AXHelpers.getDescription(header) ?? ""
+        if let parsed = parseTrackName(from: headerDesc) {
+            return parsed
+        }
+
+        let headerValue: String
+        if let rawValue = AXHelpers.getValue(header) {
+            headerValue = String(describing: rawValue)
+        } else {
+            headerValue = ""
+        }
+        if let parsed = parseTrackName(from: headerValue) {
+            return parsed
+        }
+
         // Try static text first
         if let text = AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 3),
            let name = extractTextValue(text), !name.isEmpty {
@@ -168,25 +197,69 @@ enum AXValueExtractors {
            let name = extractTextValue(field), !name.isEmpty {
             return name
         }
-        return AXHelpers.getTitle(header) ?? "Untitled"
+        if let title = AXHelpers.getTitle(header), !title.isEmpty {
+            return title
+        }
+        return headerDesc.isEmpty ? "Untitled" : headerDesc
     }
 
-    private static func extractTrackButtonState(from header: AXUIElement, prefix: String) -> Bool? {
-        let buttons = AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4)
-        for button in buttons {
-            let desc = AXHelpers.getDescription(button) ?? AXHelpers.getTitle(button) ?? ""
+    private static func extractTrackToggleState(from header: AXUIElement, prefix: String) -> Bool? {
+        let elements =
+            AXHelpers.findAllDescendants(of: header, role: kAXCheckBoxRole, maxDepth: 4)
+            + AXHelpers.findAllDescendants(of: header, role: kAXButtonRole, maxDepth: 4)
+        for element in elements {
+            let desc = AXHelpers.getDescription(element) ?? AXHelpers.getTitle(element) ?? ""
             if desc.hasPrefix(prefix) || desc.lowercased().contains(prefix.lowercased()) {
-                return extractButtonState(button)
+                return extractButtonState(element)
+            }
+        }
+        return nil
+    }
+
+    private static func extractTrackPan(from header: AXUIElement) -> Double? {
+        let sliders = AXHelpers.findAllDescendants(of: header, role: kAXSliderRole, maxDepth: 3)
+        for slider in sliders {
+            let children = AXHelpers.getChildren(slider)
+            for child in children {
+                let desc = AXHelpers.getDescription(child) ?? ""
+                if desc.localizedCaseInsensitiveContains("Pan") {
+                    let numeric = desc
+                        .replacingOccurrences(of: "Pan", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let value = Double(numeric) {
+                        return value
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractTrackVolume(from header: AXUIElement) -> Double? {
+        let sliders = AXHelpers.findAllDescendants(of: header, role: kAXSliderRole, maxDepth: 3)
+        for slider in sliders {
+            let desc = AXHelpers.getDescription(slider) ?? ""
+            if desc.localizedCaseInsensitiveContains("Volume") {
+                return extractSliderValue(slider)
             }
         }
         return nil
     }
 
     private static func inferTrackType(from header: AXUIElement) -> TrackType {
-        // Attempt to infer type from icon description or element identifiers
-        let desc = AXHelpers.getDescription(header)?.lowercased() ?? ""
-        let title = AXHelpers.getTitle(header)?.lowercased() ?? ""
-        let combined = desc + " " + title
+        // Attempt to infer type from the header plus any child descriptions/titles.
+        let headerDesc = AXHelpers.getDescription(header)?.lowercased() ?? ""
+        let headerTitle = AXHelpers.getTitle(header)?.lowercased() ?? ""
+        let childText = AXHelpers.getChildren(header)
+            .map { child in
+                [AXHelpers.getDescription(child), AXHelpers.getTitle(child)]
+                    .compactMap { $0?.lowercased() }
+                    .joined(separator: " ")
+            }
+            .joined(separator: " ")
+        let combined = [headerDesc, headerTitle, childText]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
 
         if combined.contains("audio") { return .audio }
         if combined.contains("instrument") || combined.contains("software") { return .softwareInstrument }
@@ -195,6 +268,11 @@ enum AXValueExtractors {
         if combined.contains("aux") { return .aux }
         if combined.contains("bus") { return .bus }
         if combined.contains("master") || combined.contains("stereo out") { return .master }
+        // Current Logic Pro track headers expose input monitoring + pan/volume,
+        // but not an explicit track-type label. Treat that as an audio-track heuristic.
+        if combined.contains("input monitoring") && combined.contains("volume") {
+            return .audio
+        }
         return .unknown
     }
 

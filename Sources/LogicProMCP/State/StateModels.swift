@@ -35,8 +35,8 @@ struct TrackState: Sendable, Codable, Identifiable {
     var isSoloed: Bool = false
     var isArmed: Bool = false
     var isSelected: Bool = false
-    var volume: Double = 0.0   // dB, 0 = unity
-    var pan: Double = 0.0      // -1.0 (L) to 1.0 (R)
+    var volume: Double = 0.0   // Raw track-header slider value (not normalized dB)
+    var pan: Double = 0.0      // Pan readout when exposed by AX; center is 0
     var color: String?
 }
 

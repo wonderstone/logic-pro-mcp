@@ -329,11 +329,27 @@ actor AccessibilityChannel: Channel {
         guard let window = AXLogicProElements.mainWindow() else {
             return .error("Cannot locate Logic Pro main window")
         }
-        let title = AXHelpers.getTitle(window) ?? "Unknown"
+        let rawTitle = AXHelpers.getTitle(window) ?? "Unknown"
         var info = ProjectInfo()
-        info.name = title
+        info.name = Self.normalizedProjectTitle(rawTitle)
+        info.trackCount = AXLogicProElements.allTrackHeaders().count
         info.lastUpdated = Date()
         return encodeResult(info)
+    }
+
+    static func normalizedProjectTitle(_ rawTitle: String) -> String {
+        let separators = [" - Tracks", " - Track", " - Piano Roll", " - Mixer"]
+        var baseTitle = rawTitle
+        for suffix in separators where baseTitle.hasSuffix(suffix) {
+            baseTitle = String(baseTitle.dropLast(suffix.count))
+            break
+        }
+
+        let parts = baseTitle.components(separatedBy: " - ")
+        if parts.count >= 2, parts[0].hasSuffix(".logicx") {
+            return parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return baseTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - JSON encoding
