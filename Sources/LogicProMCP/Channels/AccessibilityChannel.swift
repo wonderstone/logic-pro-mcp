@@ -98,6 +98,10 @@ actor AccessibilityChannel: Channel {
             return getSelectionState()
         case "context.get_state":
             return getContextState()
+        case "editor.get_state":
+            return getEditorState()
+        case "editor.get_notes":
+            return getEditorNotes()
 
         // MARK: - Regions
         case "region.get_regions":
@@ -424,8 +428,33 @@ actor AccessibilityChannel: Channel {
         return encodeResult(context)
     }
 
+    private func getEditorState() -> ChannelResult {
+        guard let window = AXLogicProElements.eventListWindow() else {
+            let state = EditorState(
+                activeView: "event_list",
+                eventListVisible: false,
+                detailAvailability: "event_list_hidden",
+                writeCapabilities: ["delete_selection", "quantize_selection"],
+                lastUpdated: Date()
+            )
+            return encodeResult(state)
+        }
+
+        let rows = AXLogicProElements.eventListRows()
+        let state = AXValueExtractors.extractEditorState(from: window, rows: rows)
+        return encodeResult(state)
+    }
+
+    private func getEditorNotes() -> ChannelResult {
+        let rows = AXLogicProElements.eventListRows()
+        let noteRows = AXValueExtractors.extractEventRows(from: rows).filter {
+            $0.eventType.caseInsensitiveCompare("Note") == .orderedSame
+        }
+        return encodeResult(noteRows)
+    }
+
     static func normalizedProjectTitle(_ rawTitle: String) -> String {
-        let separators = [" - Tracks", " - Track", " - Piano Roll", " - Mixer"]
+        let separators = [" - Tracks", " - Track", " - Piano Roll", " - Mixer", " - Event List"]
         var baseTitle = rawTitle
         for suffix in separators where baseTitle.hasSuffix(suffix) {
             baseTitle = String(baseTitle.dropLast(suffix.count))
@@ -448,6 +477,9 @@ actor AccessibilityChannel: Channel {
         }
         if rawTitle.hasSuffix(" - Mixer") {
             return "mixer"
+        }
+        if rawTitle.hasSuffix(" - Event List") {
+            return "event_list"
         }
         return "unknown"
     }

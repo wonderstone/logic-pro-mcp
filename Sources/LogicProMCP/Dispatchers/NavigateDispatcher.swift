@@ -16,7 +16,7 @@ struct NavigateDispatcher {
             delete_marker -> { index: Int }; \
             set_zoom -> { level: String } ("in", "out", "fit"); \
             toggle_view -> { view: String } ("mixer", "piano_roll", "score", \
-            "step_editor", "library", "inspector", "automation")
+            "step_editor", "event_list", "library", "inspector", "automation")
             """,
         inputSchema: .object([
             "type": .string("object"),
@@ -132,6 +132,7 @@ struct NavigateDispatcher {
             switch view {
             case "mixer": operation = "view.toggle_mixer"
             case "piano_roll": operation = "view.toggle_piano_roll"
+            case "event_list": operation = "view.toggle_event_list"
             case "score": operation = "view.toggle_score_editor"
             case "step_editor": operation = "view.toggle_step_editor"
             case "library": operation = "view.toggle_library"
@@ -139,7 +140,7 @@ struct NavigateDispatcher {
             case "automation": operation = "automation.toggle_view"
             default:
                 return CallTool.Result(
-                    content: [.text("Unknown view: \(view). Available: mixer, piano_roll, score, step_editor, library, inspector, automation")],
+                    content: [.text("Unknown view: \(view). Available: mixer, piano_roll, score, step_editor, event_list, library, inspector, automation")],
                     isError: true
                 )
             }

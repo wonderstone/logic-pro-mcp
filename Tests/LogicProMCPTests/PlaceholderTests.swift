@@ -48,9 +48,21 @@ final class PlaceholderTests: XCTestCase {
             "mixer"
         )
         XCTAssertEqual(
+            AccessibilityChannel.activeViewName("Simple Demo - Event List"),
+            "event_list"
+        )
+        XCTAssertEqual(
             AccessibilityChannel.activeViewName("Simple Demo"),
             "unknown"
         )
+    }
+
+    func testMIDIBridgeCapabilitiesDefaultContract() {
+        let capabilities = MIDIBridgeCapabilitiesState()
+
+        XCTAssertEqual(capabilities.exportCommand, "logic_project.export_selected_midi_bridge")
+        XCTAssertEqual(capabilities.replaceCommand, "logic_project.replace_selected_region_midi_bridge")
+        XCTAssertEqual(capabilities.scope, "selected_region_only")
     }
 
     func testExtractRegionsBuildsVisibleRegionState() {

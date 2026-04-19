@@ -45,6 +45,18 @@ struct ResourceHandlers {
         case "logic://context":
             return try await readContext(cache: cache, uri: uri)
 
+        case "logic://editor":
+            return try await readEditor(router: router, uri: uri)
+
+        case "logic://editor/notes":
+            return try await readEditorNotes(router: router, uri: uri)
+
+        case "logic://bridge/capabilities":
+            return try await readMIDIBridgeCapabilities(uri: uri)
+
+        case "logic://bridge/last-export":
+            return try await readMIDIBridgeLastExport(cache: cache, uri: uri)
+
         case "logic://regions":
             return try await readAllRegions(cache: cache, uri: uri)
 
@@ -122,6 +134,42 @@ struct ResourceHandlers {
     private static func readContext(cache: StateCache, uri: String) async throws -> ReadResource.Result {
         let context = await cache.getContext()
         let json = encodeJSON(context)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readEditor(router: ChannelRouter, uri: String) async throws -> ReadResource.Result {
+        let result = await router.route(operation: "editor.get_state")
+        guard result.isSuccess else {
+            throw MCPError.invalidParams(result.message)
+        }
+        return ReadResource.Result(
+            contents: [.text(result.message, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readEditorNotes(router: ChannelRouter, uri: String) async throws -> ReadResource.Result {
+        let result = await router.route(operation: "editor.get_notes")
+        guard result.isSuccess else {
+            throw MCPError.invalidParams(result.message)
+        }
+        return ReadResource.Result(
+            contents: [.text(result.message, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readMIDIBridgeCapabilities(uri: String) async throws -> ReadResource.Result {
+        let capabilities = MIDIBridgeCapabilitiesState()
+        let json = encodeJSON(capabilities)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readMIDIBridgeLastExport(cache: StateCache, uri: String) async throws -> ReadResource.Result {
+        let receipt = await cache.getLastMIDIBridgeExport()
+        let json = encodeJSON(receipt)
         return ReadResource.Result(
             contents: [.text(json, uri: uri, mimeType: "application/json")]
         )

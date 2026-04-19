@@ -60,6 +60,7 @@ actor CGEventChannel: Channel {
         // Views
         "view.toggle_mixer":          .key(7),          // X
         "view.toggle_piano_roll":     .key(35),         // P
+        "view.toggle_event_list":     .cmd(37),         // Cmd+L (fallback if mapped by Logic)
         "view.toggle_library":        .key(16),         // Y
         "view.toggle_inspector":      .key(34),         // I
         "view.toggle_score_editor":   .cmdOption(35),   // Cmd+Option+P (approximate)

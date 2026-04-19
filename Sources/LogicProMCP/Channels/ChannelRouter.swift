@@ -112,9 +112,14 @@ actor ChannelRouter {
         "project.silent_bounce":      [],  // Handled directly via osascript subprocess
         "project.is_running":         [],  // No channel needed — pure process check
 
+        // Editor
+        "editor.get_state":           [.accessibility],
+        "editor.get_notes":           [.accessibility],
+
         // Views — keyboard toggle
         "view.toggle_mixer":          [.cgEvent, .accessibility],
         "view.toggle_piano_roll":     [.cgEvent, .accessibility],
+        "view.toggle_event_list":     [.appleScript, .cgEvent],
         "view.toggle_score_editor":   [.cgEvent, .accessibility],
         "view.toggle_step_editor":    [.cgEvent, .accessibility],
         "view.toggle_library":        [.cgEvent, .accessibility],

@@ -199,6 +199,44 @@ enum AXValueExtractors {
         }
     }
 
+    static func extractEditorState(from window: AXUIElement, rows: [AXUIElement]) -> EditorState {
+        let rawTitle = AXHelpers.getTitle(window) ?? "Event List"
+        let eventRows = extractEventRows(from: rows)
+        let noteCount = eventRows.filter { $0.eventType.caseInsensitiveCompare("Note") == .orderedSame }.count
+
+        return EditorState(
+            windowTitle: rawTitle,
+            activeView: "event_list",
+            eventListVisible: true,
+            rowCount: rows.count,
+            noteRowCount: noteCount,
+            detailAvailability: noteCount > 0 ? "event_type_only" : "no_note_rows_visible",
+            writeMode: "selection_relative",
+            writeCapabilities: ["delete_selection", "quantize_selection"],
+            lastUpdated: Date()
+        )
+    }
+
+    static func extractEventRows(from rows: [AXUIElement]) -> [EditorEventRowState] {
+        rows.enumerated().map { rowIndex, row in
+            let eventType = extractEventType(from: row) ?? "Unknown"
+            let primaryValue = extractPrimaryEventValue(from: row)
+            let selected = extractSelectedState(row) ?? false
+            let detailAvailability = primaryValue == nil || primaryValue?.isEmpty == true
+                ? "event_type_only"
+                : "partial"
+
+            return EditorEventRowState(
+                id: "event-list-row-\(rowIndex)",
+                rowIndex: rowIndex,
+                eventType: eventType,
+                primaryValue: primaryValue,
+                isSelected: selected,
+                detailAvailability: detailAvailability
+            )
+        }
+    }
+
     private static func extractTrackName(from header: AXUIElement) -> String {
         let headerDesc = AXHelpers.getDescription(header) ?? ""
         if let parsed = parseTrackName(from: headerDesc) {
@@ -243,6 +281,46 @@ enum AXValueExtractors {
             return title
         }
         return "Untitled Region"
+    }
+
+    private static func extractEventType(from row: AXUIElement) -> String? {
+        for cell in AXHelpers.getChildren(row) {
+            if let directDesc = AXHelpers.getDescription(cell), !directDesc.isEmpty {
+                return directDesc
+            }
+            for child in AXHelpers.getChildren(cell) {
+                if let desc = AXHelpers.getDescription(child), !desc.isEmpty {
+                    return desc
+                }
+                if let title = AXHelpers.getTitle(child), !title.isEmpty {
+                    return title
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractPrimaryEventValue(from row: AXUIElement) -> String? {
+        for cell in AXHelpers.getChildren(row) {
+            if let value = AXHelpers.getValue(cell) {
+                let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    return text
+                }
+            }
+            for child in AXHelpers.getChildren(cell) {
+                if let value = AXHelpers.getValue(child) {
+                    let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty {
+                        return text
+                    }
+                }
+                if let title = AXHelpers.getTitle(child), !title.isEmpty {
+                    return title
+                }
+            }
+        }
+        return nil
     }
 
     private static func extractTrackToggleState(from header: AXUIElement, prefix: String) -> Bool? {

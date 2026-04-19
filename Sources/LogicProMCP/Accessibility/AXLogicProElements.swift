@@ -132,6 +132,31 @@ enum AXLogicProElements {
         return rows[index]
     }
 
+    // MARK: - Event List
+
+    /// Find the current Event List window if it is open.
+    static func eventListWindow() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first(where: {
+            (AXHelpers.getTitle($0) ?? "").localizedCaseInsensitiveContains("Event List")
+        })
+    }
+
+    /// Find the AXTable inside the Event List window.
+    static func eventListTable() -> AXUIElement? {
+        guard let window = eventListWindow() else { return nil }
+        return AXHelpers.findDescendant(of: window, role: kAXTableRole, maxDepth: 10)
+    }
+
+    /// Enumerate the visible rows in the Event List table.
+    static func eventListRows() -> [AXUIElement] {
+        guard let table = eventListTable() else { return [] }
+        return AXHelpers.getChildren(table).filter {
+            AXHelpers.getRole($0) == kAXRowRole
+        }
+    }
+
     // MARK: - Mixer
 
     /// Find the mixer area.

@@ -32,6 +32,9 @@ actor AppleScriptChannel: Channel {
         case "project.save":
             return await runScript(saveProjectScript())
 
+        case "view.toggle_event_list":
+            return await runScript(toggleEventListScript())
+
         // Transport fallbacks (AppleScript is last resort for these)
         case "transport.play":
             return await runScript(transportScript(action: "play"))
@@ -129,6 +132,19 @@ actor AppleScriptChannel: Channel {
         """
         tell application "Logic Pro"
             \(action)
+        end tell
+        """
+    }
+
+    private func toggleEventListScript() -> String {
+        let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+        tell application "Logic Pro" to activate
+        delay 0.3
+        tell application "System Events"
+            tell process "\(processName)"
+                click menu item "Open Event List" of menu "Window" of menu bar item "Window" of menu bar 1
+            end tell
         end tell
         """
     }

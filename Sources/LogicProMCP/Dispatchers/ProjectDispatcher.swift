@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import MCP
 
@@ -6,12 +7,15 @@ struct ProjectDispatcher {
         name: "logic_project",
         description: """
             Project lifecycle in Logic Pro. \
-            Commands: new, open, save, save_as, close, bounce, silent_bounce, launch, quit. \
+            Commands: new, open, save, save_as, close, bounce, silent_bounce, export_selected_midi_bridge, import_midi_bridge, replace_selected_region_midi_bridge, launch, quit. \
             Params by command: \
             open -> { path: String }; \
             save_as -> { path: String }; \
             bounce -> {} (opens bounce dialog); \
             silent_bounce -> { filename?: String } (automated bounce to WAV, returns file path); \
+            export_selected_midi_bridge -> { output_path?: String } (prepares a human-confirmed MIDI export handoff for the current selection; does not press Save automatically); \
+            import_midi_bridge -> { path: String } (imports a MIDI file into the current project); \
+            replace_selected_region_midi_bridge -> { path: String } (deletes current selection, then imports MIDI file); \
             launch/quit -> {} (app lifecycle); \
             Others -> {}
             """,
@@ -80,6 +84,28 @@ struct ProjectDispatcher {
             let filename = params["filename"]?.stringValue ?? "bounce_output"
             return await silentBounce(filename: filename)
 
+        case "export_selected_midi_bridge":
+            let outputPath = params["output_path"]?.stringValue
+            return await exportSelectedMIDI(outputPath: outputPath, cache: cache)
+
+        case "import_midi_bridge":
+            let path = params["path"]?.stringValue ?? ""
+            guard !path.isEmpty else {
+                return CallTool.Result(content: [.text("import_midi_bridge requires 'path' param")], isError: true)
+            }
+            return await importMIDI(path: path)
+
+        case "replace_selected_region_midi_bridge":
+            let path = params["path"]?.stringValue ?? ""
+            guard !path.isEmpty else {
+                return CallTool.Result(content: [.text("replace_selected_region_midi_bridge requires 'path' param")], isError: true)
+            }
+            let deleteResult = await router.route(operation: "edit.delete")
+            guard deleteResult.isSuccess else {
+                return CallTool.Result(content: [.text("Failed to delete current selection before import: \(deleteResult.message)")], isError: true)
+            }
+            return await importMIDI(path: path, replaceMode: true)
+
         case "launch":
             if ProcessUtils.isLogicProRunning {
                 return CallTool.Result(content: [.text("Logic Pro is already running")], isError: false)
@@ -114,7 +140,7 @@ struct ProjectDispatcher {
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown project command: \(command). Available: new, open, save, save_as, close, bounce, silent_bounce, launch, quit")],
+                content: [.text("Unknown project command: \(command). Available: new, open, save, save_as, close, bounce, silent_bounce, export_selected_midi_bridge, import_midi_bridge, replace_selected_region_midi_bridge, launch, quit")],
                 isError: true
             )
         }
@@ -308,5 +334,174 @@ struct ProjectDispatcher {
                 isError: true
             )
         }
+    }
+
+    private static func exportSelectedMIDI(
+        outputPath: String?,
+        cache: StateCache
+    ) async -> CallTool.Result {
+        let requestedURL: URL
+        if let outputPath, !outputPath.isEmpty {
+            requestedURL = URL(fileURLWithPath: outputPath)
+        } else {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("logic-pro-mcp-midi-exports", isDirectory: true)
+            requestedURL = directory.appendingPathComponent("logic_selection_\(timestampString()).mid")
+        }
+
+        let directoryURL = requestedURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        } catch {
+            return CallTool.Result(content: [.text("{\"error\":\"Failed to create export directory: \(escapeJSON(error.localizedDescription))\"}")], isError: true)
+        }
+
+        let selection = await cache.getSelection()
+        let project = await cache.getProject()
+        let receipt = MIDIBridgeExportState(
+            status: "manual_required",
+            exportPath: requestedURL.path,
+            sourceProjectName: project.name,
+            selectedRegionCount: selection.selectedRegionCount,
+            selectedRegionNames: selection.selectedRegionNames,
+            exportedAt: Date()
+        )
+        await cache.updateLastMIDIBridgeExport(receipt)
+
+        let json = """
+        {"success":false,"status":"manual_required","requestedPath":"\(escapeJSON(requestedURL.path))","selectedRegionCount":\(selection.selectedRegionCount),"selectedRegionNames":\(jsonArray(selection.selectedRegionNames)),"error":"Human must complete the Logic Pro Save MIDI dialog manually.","recommended_next_step":"In Logic Pro, export the current selection as MIDI and save it to the requested path, then retry the read or patch step with the saved file.","scope":"selected_region_only"}
+        """
+        return CallTool.Result(content: [.text(json)], isError: false)
+    }
+
+    private static func importMIDI(path: String, replaceMode: Bool = false) async -> CallTool.Result {
+        let fileURL = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return CallTool.Result(content: [.text("{\"error\":\"MIDI file not found: \(escapeJSON(fileURL.path))\"}")], isError: true)
+        }
+
+        let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
+        let fileText = appleScriptEscaped(fileURL.path)
+        let script = """
+        tell application "Logic Pro" to activate
+        delay 0.4
+
+        tell application "System Events"
+            tell process "\(processName)"
+                click menu item "MIDI File…" of menu "Import" of menu item "Import" of menu "File" of menu bar item "File" of menu bar 1
+                delay 1.0
+
+                set dialogReady to false
+                repeat 40 times
+                    try
+                        if exists button "Open" of window 1 then
+                            set dialogReady to true
+                            exit repeat
+                        end if
+                    end try
+                    delay 0.25
+                end repeat
+
+                if not dialogReady then
+                    return "ERROR:Import MIDI dialog did not appear"
+                end if
+
+                keystroke "G" using {command down, shift down}
+                delay 0.5
+                keystroke "\(fileText)"
+                delay 0.2
+                key code 36
+                delay 0.8
+
+                try
+                    click button "Open" of window 1
+                on error
+                    try
+                        click button "Open" of sheet 1 of window 1
+                    on error
+                        return "ERROR:Could not confirm MIDI import dialog"
+                    end try
+                end try
+            end tell
+        end tell
+        """
+
+        let result = runOsaScript(source: script)
+        if result.output.hasPrefix("ERROR:") {
+            let message = String(result.output.dropFirst(6))
+            return CallTool.Result(content: [.text("{\"error\":\"\(escapeJSON(message))\"}")], isError: true)
+        }
+        if result.exitCode != 0 {
+            return CallTool.Result(content: [.text("{\"error\":\"\(escapeJSON(result.stderr.isEmpty ? result.output : result.stderr))\"}")], isError: true)
+        }
+
+        let json = """
+        {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","verification":"manual_or_followup_read_required"}
+        """
+        return CallTool.Result(content: [.text(json)], isError: false)
+    }
+
+    private struct OsaScriptResult {
+        let output: String
+        let stderr: String
+        let exitCode: Int32
+    }
+
+    private struct DialogFinalizeResult {
+        let success: Bool
+        let message: String
+    }
+
+    private static func runOsaScript(source: String) -> OsaScriptResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return OsaScriptResult(output: "", stderr: error.localizedDescription, exitCode: 1)
+        }
+
+        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let error = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return OsaScriptResult(output: output, stderr: error, exitCode: process.terminationStatus)
+    }
+
+    private static func timestampString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
+
+    private static func errorJSONResult(_ message: String) -> CallTool.Result {
+        CallTool.Result(content: [.text("{\"error\":\"\(escapeJSON(message))\"}")], isError: true)
+    }
+
+    private static func appleScriptEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func escapeJSON(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    private static func jsonArray(_ values: [String]) -> String {
+        let encoded = values.map { "\"\(escapeJSON($0))\"" }.joined(separator: ",")
+        return "[\(encoded)]"
     }
 }

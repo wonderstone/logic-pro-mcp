@@ -103,6 +103,52 @@ struct ContextState: Sendable, Codable {
     var lastUpdated: Date = .distantPast
 }
 
+/// One visible Event List row inside the current editor scope.
+struct EditorEventRowState: Sendable, Codable, Identifiable {
+    let id: String
+    var rowIndex: Int
+    var eventType: String
+    var primaryValue: String?
+    var isSelected: Bool = false
+    var detailAvailability: String = "event_type_only"
+}
+
+/// Summary of the current Event List editor scope.
+struct EditorState: Sendable, Codable {
+    var windowTitle: String = ""
+    var activeView: String = "unknown"
+    var eventListVisible: Bool = false
+    var rowCount: Int = 0
+    var noteRowCount: Int = 0
+    var detailAvailability: String = "event_type_only"
+    var writeMode: String = "selection_relative"
+    var writeCapabilities: [String] = []
+    var scope: String = "event_list_visible_only"
+    var scopeNote: String = "Event List readback currently proves row identity and event type; note value columns still require MIDI bridge export for full detail."
+    var lastUpdated: Date = .distantPast
+}
+
+/// Receipt for the last MIDI bridge export performed through Logic Pro UI automation.
+struct MIDIBridgeExportState: Sendable, Codable {
+    var status: String = "none"
+    var exportPath: String?
+    var sourceProjectName: String?
+    var selectedRegionCount: Int = 0
+    var selectedRegionNames: [String] = []
+    var exportedAt: Date?
+}
+
+/// Capability summary for the MIDI export/import bridge path.
+struct MIDIBridgeCapabilitiesState: Sendable, Codable {
+    var exportCommand: String = "logic_project.export_selected_midi_bridge"
+    var importCommand: String = "logic_project.import_midi_bridge"
+    var replaceCommand: String = "logic_project.replace_selected_region_midi_bridge"
+    var readMode: String = "human_confirmed_selection_export_then_parse"
+    var writeMode: String = "delete_selection_then_import_file"
+    var scope: String = "selected_region_only"
+    var caveat: String = "Bridge export now stops at the Logic Pro Save MIDI dialog boundary; a human must complete the save step before MuseFlow can parse the exported file."
+}
+
 /// Marker info.
 struct MarkerState: Sendable, Codable, Identifiable {
     let id: Int

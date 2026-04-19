@@ -9,6 +9,7 @@ actor StateCache {
     private(set) var regions: [RegionState] = []
     private(set) var selection = SelectionState()
     private(set) var context = ContextState()
+    private(set) var lastMIDIBridgeExport = MIDIBridgeExportState()
     private(set) var markers: [MarkerState] = []
     private(set) var project = ProjectInfo()
     private(set) var automationMode = AutomationMode.off
@@ -34,6 +35,7 @@ actor StateCache {
     func getRegions() -> [RegionState] { regions }
     func getSelection() -> SelectionState { selection }
     func getContext() -> ContextState { context }
+    func getLastMIDIBridgeExport() -> MIDIBridgeExportState { lastMIDIBridgeExport }
     func getMarkers() -> [MarkerState] { markers }
     func getProject() -> ProjectInfo { project }
     func getAutomationMode() -> AutomationMode { automationMode }
@@ -67,6 +69,10 @@ actor StateCache {
 
     func updateContext(_ newContext: ContextState) {
         context = newContext
+    }
+
+    func updateLastMIDIBridgeExport(_ newExport: MIDIBridgeExportState) {
+        lastMIDIBridgeExport = newExport
     }
 
     func updateMarkers(_ newMarkers: [MarkerState]) {

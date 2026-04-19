@@ -42,6 +42,30 @@ struct ResourceProvider {
             mimeType: "application/json"
         ),
         Resource(
+            name: "Editor State",
+            uri: "logic://editor",
+            description: "Current Event List editor scope summary, including visible note-row count and write-mode caveats",
+            mimeType: "application/json"
+        ),
+        Resource(
+            name: "Editor Notes",
+            uri: "logic://editor/notes",
+            description: "Visible Event List note rows in the current editor scope",
+            mimeType: "application/json"
+        ),
+        Resource(
+            name: "MIDI Bridge Capabilities",
+            uri: "logic://bridge/capabilities",
+            description: "Current MIDI export/import bridge capabilities and caveats",
+            mimeType: "application/json"
+        ),
+        Resource(
+            name: "MIDI Bridge Last Export",
+            uri: "logic://bridge/last-export",
+            description: "Receipt for the last export_selected_midi_bridge command",
+            mimeType: "application/json"
+        ),
+        Resource(
             name: "Regions",
             uri: "logic://regions",
             description: "Visible regions grouped across the current track contents area",
