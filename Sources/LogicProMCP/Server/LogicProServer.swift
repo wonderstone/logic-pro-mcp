@@ -2,7 +2,7 @@ import Foundation
 import MCP
 
 /// Main MCP server for Logic Pro integration.
-/// Exposes 8 dispatcher tools + 7 resources, routing through
+/// Exposes 8 dispatcher tools + 11 resource surfaces, routing through
 /// the ChannelRouter to the appropriate macOS communication channel.
 actor LogicProServer {
     private let server: Server
@@ -124,7 +124,7 @@ actor LogicProServer {
         }
     }
 
-    // MARK: - Resource Registration (7 resources)
+    // MARK: - Resource Registration (11 resource surfaces)
 
     private func registerResources() async {
         let router = self.router
@@ -169,7 +169,7 @@ actor LogicProServer {
         await registerResources()
 
         Log.info(
-            "Starting \(ServerConfig.serverName) v\(ServerConfig.serverVersion) — 8 tools, 7 resources",
+            "Starting \(ServerConfig.serverName) v\(ServerConfig.serverVersion) — 8 tools, 11 resource surfaces",
             subsystem: "server"
         )
 

@@ -94,10 +94,14 @@ actor AccessibilityChannel: Channel {
         // MARK: - Project
         case "project.get_info":
             return getProjectInfo()
+        case "selection.get_state":
+            return getSelectionState()
+        case "context.get_state":
+            return getContextState()
 
         // MARK: - Regions
         case "region.get_regions":
-            return .error("Region reading not yet implemented via AX")
+            return getRegions(params: params)
         case "region.select", "region.loop", "region.set_name", "region.move", "region.resize":
             return .error("Region operations not yet implemented via AX")
 
@@ -258,6 +262,37 @@ actor AccessibilityChannel: Channel {
         case pan
     }
 
+    // MARK: - Regions
+
+    private func getRegions(params: [String: String]) -> ChannelResult {
+        let contentRows = AXLogicProElements.allTrackContentRows()
+        let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
+            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+        }
+
+        if contentRows.isEmpty || tracks.isEmpty {
+            return .error("No visible track contents found — is the Tracks area open?")
+        }
+
+        let onlyTrackIndex = params["index"].flatMap(Int.init)
+        var regions: [RegionState] = []
+
+        for (index, row) in contentRows.enumerated() {
+            if let onlyTrackIndex, index != onlyTrackIndex {
+                continue
+            }
+            guard index < tracks.count else { continue }
+            let track = tracks[index]
+            regions.append(contentsOf: AXValueExtractors.extractRegions(
+                from: row,
+                trackIndex: index,
+                trackName: track.name
+            ))
+        }
+
+        return encodeResult(regions)
+    }
+
     private func getMixerState() -> ChannelResult {
         guard let mixer = AXLogicProElements.getMixerArea() else {
             return .error("Cannot locate mixer — is it visible?")
@@ -337,6 +372,58 @@ actor AccessibilityChannel: Channel {
         return encodeResult(info)
     }
 
+    private func getSelectionState() -> ChannelResult {
+        let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
+            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+        }
+        let contentRows = AXLogicProElements.allTrackContentRows()
+
+        var selection = SelectionState()
+        if let selectedTrack = tracks.first(where: { $0.isSelected }) {
+            selection.selectedTrackIndex = selectedTrack.id
+            selection.selectedTrackName = selectedTrack.name
+        }
+
+        var selectedRegions: [RegionState] = []
+        for (index, row) in contentRows.enumerated() {
+            guard index < tracks.count else { continue }
+            let track = tracks[index]
+            let regions = AXValueExtractors.extractRegions(from: row, trackIndex: index, trackName: track.name)
+            selectedRegions.append(contentsOf: regions.filter(\ .isSelected))
+        }
+
+        selection.selectedRegionIDs = selectedRegions.map(\ .id)
+        selection.selectedRegionNames = selectedRegions.map(\ .name)
+        selection.selectedRegionCount = selectedRegions.count
+        selection.lastUpdated = Date()
+        return encodeResult(selection)
+    }
+
+    private func getContextState() -> ChannelResult {
+        guard let window = AXLogicProElements.mainWindow() else {
+            return .error("Cannot locate Logic Pro main window")
+        }
+        let rawTitle = AXHelpers.getTitle(window) ?? "Unknown"
+        let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
+            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+        }
+        let regions = AXLogicProElements.allTrackContentRows().enumerated().flatMap { index, row in
+            guard index < tracks.count else { return [RegionState]() }
+            let track = tracks[index]
+            return AXValueExtractors.extractRegions(from: row, trackIndex: index, trackName: track.name)
+        }
+
+        let context = ContextState(
+            projectName: Self.normalizedProjectTitle(rawTitle),
+            windowTitle: rawTitle,
+            activeView: Self.activeViewName(rawTitle),
+            visibleTrackCount: tracks.count,
+            visibleRegionCount: regions.count,
+            lastUpdated: Date()
+        )
+        return encodeResult(context)
+    }
+
     static func normalizedProjectTitle(_ rawTitle: String) -> String {
         let separators = [" - Tracks", " - Track", " - Piano Roll", " - Mixer"]
         var baseTitle = rawTitle
@@ -350,6 +437,19 @@ actor AccessibilityChannel: Channel {
             return parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return baseTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func activeViewName(_ rawTitle: String) -> String {
+        if rawTitle.hasSuffix(" - Tracks") || rawTitle.hasSuffix(" - Track") {
+            return "tracks"
+        }
+        if rawTitle.hasSuffix(" - Piano Roll") {
+            return "piano_roll"
+        }
+        if rawTitle.hasSuffix(" - Mixer") {
+            return "mixer"
+        }
+        return "unknown"
     }
 
     // MARK: - JSON encoding

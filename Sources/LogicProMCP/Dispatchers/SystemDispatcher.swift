@@ -229,7 +229,7 @@ struct SystemDispatcher {
 
         default:
             return """
-                Logic Pro MCP — 8 dispatcher tools + 7 resources
+                Logic Pro MCP — 8 dispatcher tools + 11 resource surfaces
 
                 Tools (actions):
                   logic_transport  — Transport control (play, stop, record, tempo...)
@@ -247,6 +247,10 @@ struct SystemDispatcher {
                   logic://tracks/{index}   — Single track detail
                   logic://mixer            — Mixer state
                   logic://project/info     — Project info
+                  logic://selection        — Current visible selection summary
+                  logic://context          — Current Logic Pro view/context summary
+                  logic://regions          — Visible regions across tracks
+                  logic://regions/{index}  — Visible regions on one track
                   logic://midi/ports       — MIDI ports
                   logic://system/health    — System health
 

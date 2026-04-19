@@ -107,6 +107,31 @@ enum AXLogicProElements {
         return AXHelpers.findAllDescendants(of: container, role: kAXRowRole, maxDepth: 4)
     }
 
+    /// Find the container that holds visible track content rows and regions.
+    static func getTrackContents() -> AXUIElement? {
+        guard let window = mainWindow() else { return nil }
+
+        let groups = AXHelpers.findAllDescendants(of: window, role: kAXGroupRole, maxDepth: 10)
+        return groups.first(where: {
+            (AXHelpers.getDescription($0) ?? "").localizedCaseInsensitiveContains("Tracks contents")
+        })
+    }
+
+    /// Enumerate visible content rows for each track in the current Tracks view.
+    static func allTrackContentRows() -> [AXUIElement] {
+        guard let contents = getTrackContents() else { return [] }
+        return AXHelpers.getChildren(contents).filter {
+            AXHelpers.getRole($0) == "AXLayoutArea"
+        }
+    }
+
+    /// Find the visible content row for a given track index.
+    static func findTrackContentRow(at index: Int) -> AXUIElement? {
+        let rows = allTrackContentRows()
+        guard index >= 0 && index < rows.count else { return nil }
+        return rows[index]
+    }
+
     // MARK: - Mixer
 
     /// Find the mixer area.

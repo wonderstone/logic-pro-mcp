@@ -171,6 +171,34 @@ enum AXValueExtractors {
         return parsed.isEmpty ? nil : parsed
     }
 
+    static func extractRegions(from contentRow: AXUIElement, trackIndex: Int, trackName: String) -> [RegionState] {
+        let regionItems = AXHelpers.getChildren(contentRow).filter {
+            AXHelpers.getRole($0) == "AXLayoutItem"
+        }
+
+        return regionItems.enumerated().map { offset, item in
+            let name = extractRegionName(from: item)
+            let isSelected = extractSelectedState(item) ?? false
+            let hasLoopHandle = AXHelpers.findDescendant(of: item, role: "AXHandle", title: nil, identifier: nil, maxDepth: 2) != nil
+                || AXHelpers.getChildren(item).contains(where: {
+                    AXHelpers.getRole($0) == "AXHandle"
+                    && (AXHelpers.getDescription($0) ?? "").localizedCaseInsensitiveContains("loop")
+                })
+
+            return RegionState(
+                id: "track-\(trackIndex)-region-\(offset)",
+                name: name,
+                trackIndex: trackIndex,
+                trackName: trackName,
+                startPosition: "unknown",
+                endPosition: "unknown",
+                length: "unknown",
+                isSelected: isSelected,
+                isLooped: hasLoopHandle
+            )
+        }
+    }
+
     private static func extractTrackName(from header: AXUIElement) -> String {
         let headerDesc = AXHelpers.getDescription(header) ?? ""
         if let parsed = parseTrackName(from: headerDesc) {
@@ -201,6 +229,20 @@ enum AXValueExtractors {
             return title
         }
         return headerDesc.isEmpty ? "Untitled" : headerDesc
+    }
+
+    private static func extractRegionName(from item: AXUIElement) -> String {
+        if let desc = AXHelpers.getDescription(item), !desc.isEmpty {
+            return desc
+        }
+        if let textField = AXHelpers.findDescendant(of: item, role: kAXTextFieldRole, maxDepth: 2),
+           let name = extractTextValue(textField), !name.isEmpty {
+            return name
+        }
+        if let title = AXHelpers.getTitle(item), !title.isEmpty {
+            return title
+        }
+        return "Untitled Region"
     }
 
     private static func extractTrackToggleState(from header: AXUIElement, prefix: String) -> Bool? {

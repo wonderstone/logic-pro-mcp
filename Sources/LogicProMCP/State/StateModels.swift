@@ -72,11 +72,35 @@ struct RegionState: Sendable, Codable, Identifiable {
     let id: String
     var name: String
     var trackIndex: Int
+    var trackName: String
     var startPosition: String   // Bar.Beat
     var endPosition: String
     var length: String
     var isSelected: Bool = false
     var isLooped: Bool = false
+}
+
+/// Current visible selection summary.
+struct SelectionState: Sendable, Codable {
+    var selectedTrackIndex: Int?
+    var selectedTrackName: String?
+    var selectedRegionIDs: [String] = []
+    var selectedRegionNames: [String] = []
+    var selectedRegionCount: Int = 0
+    var scope: String = "visible_only"
+    var lastUpdated: Date = .distantPast
+}
+
+/// Current Logic Pro window/view context.
+struct ContextState: Sendable, Codable {
+    var projectName: String = ""
+    var windowTitle: String = ""
+    var activeView: String = "unknown"
+    var visibleTrackCount: Int = 0
+    var visibleRegionCount: Int = 0
+    var scope: String = "visible_only"
+    var scopeNote: String = "Current Logic Pro readback is limited to objects visible in the current UI layout."
+    var lastUpdated: Date = .distantPast
 }
 
 /// Marker info.

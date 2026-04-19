@@ -62,6 +62,9 @@ actor StatePoller {
 
             if shouldPollTracks {
                 await pollTracks(axChannel: axChannel, cache: cache)
+                await pollRegions(axChannel: axChannel, cache: cache)
+                await pollSelection(axChannel: axChannel, cache: cache)
+                await pollContext(axChannel: axChannel, cache: cache)
                 await pollProject(axChannel: axChannel, cache: cache)
             }
 
@@ -113,6 +116,22 @@ actor StatePoller {
         }
     }
 
+    private func pollRegions(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "region.get_regions", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Regions poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            let regions = try decoder.decode([RegionState].self, from: data)
+            await cache.updateRegions(regions)
+        } catch {
+            Log.debug("Regions decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
     private func pollProject(axChannel: AccessibilityChannel, cache: StateCache) async {
         let result = await axChannel.execute(operation: "project.get_info", params: [:])
         guard case .success(let json) = result else {
@@ -127,6 +146,40 @@ actor StatePoller {
             await cache.updateProject(info)
         } catch {
             Log.debug("Project decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollSelection(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "selection.get_state", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Selection poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let selection = try decoder.decode(SelectionState.self, from: data)
+            await cache.updateSelection(selection)
+        } catch {
+            Log.debug("Selection decode failed: \(error)", subsystem: "poller")
+        }
+    }
+
+    private func pollContext(axChannel: AccessibilityChannel, cache: StateCache) async {
+        let result = await axChannel.execute(operation: "context.get_state", params: [:])
+        guard case .success(let json) = result else {
+            Log.debug("Context poll failed: \(result.message)", subsystem: "poller")
+            return
+        }
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let context = try decoder.decode(ContextState.self, from: data)
+            await cache.updateContext(context)
+        } catch {
+            Log.debug("Context decode failed: \(error)", subsystem: "poller")
         }
     }
 

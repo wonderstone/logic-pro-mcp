@@ -19,6 +19,12 @@ struct ResourceHandlers {
                 return try await readTrack(at: index, cache: cache, uri: uri)
             }
         }
+        if uri.hasPrefix("logic://regions/") {
+            let indexStr = String(uri.dropFirst("logic://regions/".count))
+            if let index = Int(indexStr) {
+                return try await readRegions(at: index, cache: cache, uri: uri)
+            }
+        }
 
         switch uri {
         case "logic://transport/state":
@@ -32,6 +38,15 @@ struct ResourceHandlers {
 
         case "logic://project/info":
             return try await readProjectInfo(cache: cache, uri: uri)
+
+        case "logic://selection":
+            return try await readSelection(cache: cache, uri: uri)
+
+        case "logic://context":
+            return try await readContext(cache: cache, uri: uri)
+
+        case "logic://regions":
+            return try await readAllRegions(cache: cache, uri: uri)
 
         case "logic://midi/ports":
             return try await readMIDIPorts(router: router, uri: uri)
@@ -83,6 +98,38 @@ struct ResourceHandlers {
     private static func readProjectInfo(cache: StateCache, uri: String) async throws -> ReadResource.Result {
         let info = await cache.getProject()
         let json = encodeJSON(info)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readAllRegions(cache: StateCache, uri: String) async throws -> ReadResource.Result {
+        let regions = await cache.getRegions()
+        let json = encodeJSON(regions)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readSelection(cache: StateCache, uri: String) async throws -> ReadResource.Result {
+        let selection = await cache.getSelection()
+        let json = encodeJSON(selection)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readContext(cache: StateCache, uri: String) async throws -> ReadResource.Result {
+        let context = await cache.getContext()
+        let json = encodeJSON(context)
+        return ReadResource.Result(
+            contents: [.text(json, uri: uri, mimeType: "application/json")]
+        )
+    }
+
+    private static func readRegions(at index: Int, cache: StateCache, uri: String) async throws -> ReadResource.Result {
+        let regions = await cache.getRegions().filter { $0.trackIndex == index }
+        let json = encodeJSON(regions)
         return ReadResource.Result(
             contents: [.text(json, uri: uri, mimeType: "application/json")]
         )

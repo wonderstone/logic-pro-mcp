@@ -7,6 +7,8 @@ actor StateCache {
     private(set) var tracks: [TrackState] = []
     private(set) var channelStrips: [ChannelStripState] = []
     private(set) var regions: [RegionState] = []
+    private(set) var selection = SelectionState()
+    private(set) var context = ContextState()
     private(set) var markers: [MarkerState] = []
     private(set) var project = ProjectInfo()
     private(set) var automationMode = AutomationMode.off
@@ -30,6 +32,8 @@ actor StateCache {
         channelStrips.first(where: { $0.trackIndex == index })
     }
     func getRegions() -> [RegionState] { regions }
+    func getSelection() -> SelectionState { selection }
+    func getContext() -> ContextState { context }
     func getMarkers() -> [MarkerState] { markers }
     func getProject() -> ProjectInfo { project }
     func getAutomationMode() -> AutomationMode { automationMode }
@@ -55,6 +59,14 @@ actor StateCache {
 
     func updateRegions(_ newRegions: [RegionState]) {
         regions = newRegions
+    }
+
+    func updateSelection(_ newSelection: SelectionState) {
+        selection = newSelection
+    }
+
+    func updateContext(_ newContext: ContextState) {
+        context = newContext
     }
 
     func updateMarkers(_ newMarkers: [MarkerState]) {

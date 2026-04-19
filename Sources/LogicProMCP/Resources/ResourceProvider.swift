@@ -30,6 +30,24 @@ struct ResourceProvider {
             mimeType: "application/json"
         ),
         Resource(
+            name: "Selection",
+            uri: "logic://selection",
+            description: "Current visible track/region selection summary",
+            mimeType: "application/json"
+        ),
+        Resource(
+            name: "Context",
+            uri: "logic://context",
+            description: "Current Logic Pro window/view context and visible scope summary",
+            mimeType: "application/json"
+        ),
+        Resource(
+            name: "Regions",
+            uri: "logic://regions",
+            description: "Visible regions grouped across the current track contents area",
+            mimeType: "application/json"
+        ),
+        Resource(
             name: "MIDI Ports",
             uri: "logic://midi/ports",
             description: "Available MIDI ports (system + virtual)",
@@ -48,6 +66,12 @@ struct ResourceProvider {
             uriTemplate: "logic://tracks/{index}",
             name: "Track Detail",
             description: "Single track detail by index (including automation mode)",
+            mimeType: "application/json"
+        ),
+        Resource.Template(
+            uriTemplate: "logic://regions/{index}",
+            name: "Track Regions",
+            description: "Visible regions for one track by index",
             mimeType: "application/json"
         ),
     ]
