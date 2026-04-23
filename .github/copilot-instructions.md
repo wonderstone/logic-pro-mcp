@@ -9,12 +9,12 @@ Interface contract is defined in a shared neutral file:
 
 | 关键词 | 必读文件 | 跳过后果 |
 |---|---|---|
-| museflow 集成 / tool interface / 跨项目接口 | `~/Desktop/shared-protocols/MCP_TOOL_INTERFACE.md`（外部 shared-protocols 仓库，不在 `music-studio/` 内） | 工具名/参数/响应格式变更后 museflow 无声失败 |
+| museflow 集成 / tool interface / 跨项目接口 | `~/Desktop/shared-protocols/protocols/MCP_TOOL_INTERFACE.md`（外部 shared-protocols 仓库，不在 `music-studio/` 内） | 工具名/参数/响应格式变更后 museflow 无声失败 |
 
 ### Change Rule
 
 修改任何 Dispatcher 的工具名、参数名、响应格式时，**必须同一会话内**：
-1. 更新 `~/Desktop/shared-protocols/MCP_TOOL_INTERFACE.md`
+1. 更新 `~/Desktop/shared-protocols/protocols/MCP_TOOL_INTERFACE.md`
 2. 通知 museflow 侧同步更新调用代码
 
 ## Workspace Shared Defaults (music-studio)

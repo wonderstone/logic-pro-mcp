@@ -15,7 +15,7 @@ description: "Project adapter for logic-pro-mcp. Use when working on Logic Pro M
 
 ## Critical Topic Triggers
 
-- `tool interface`, `dispatcher`, `museflow integration`, `MCP contract`: read `~/Desktop/shared-protocols/MCP_TOOL_INTERFACE.md` before changing names, params, or response shape. This file lives in the external `shared-protocols` repo, not under `music-studio/`.
+- `tool interface`, `dispatcher`, `museflow integration`, `MCP contract`: read `~/Desktop/shared-protocols/protocols/MCP_TOOL_INTERFACE.md` before changing names, params, or response shape. This file lives in the external `shared-protocols` repo, not under `music-studio/`.
 - `bounce`, `render`, `logic pro automation`: read `README.md` and the relevant dispatcher/channel files.
 - `state`, `cache`, `poller`, `resource`: read `Sources/LogicProMCP/State/` and `Sources/LogicProMCP/Resources/`.
 - `permissions`, `health`, `check-permissions`: inspect `main.swift`, `Utilities/`, and `logic://system/health` implementation.
