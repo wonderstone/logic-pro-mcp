@@ -1,4 +1,5 @@
 import XCTest
+import MCP
 @testable import LogicProMCP
 
 final class PlaceholderTests: XCTestCase {
@@ -19,6 +20,27 @@ final class PlaceholderTests: XCTestCase {
 
     func testParseTrackNameReturnsNilWithoutQuotedName() {
         XCTAssertNil(AXValueExtractors.parseTrackName(from: "Tracks header"))
+    }
+
+    func testInferTrackTypeRequiresExplicitEvidence() {
+        XCTAssertEqual(
+            AXValueExtractors.inferTrackType(
+                fromCombinedText: "track 1 dark soul mute input monitoring volume"
+            ),
+            .unknown
+        )
+        XCTAssertEqual(
+            AXValueExtractors.inferTrackType(
+                fromCombinedText: "software instrument track punchy bottom"
+            ),
+            .softwareInstrument
+        )
+        XCTAssertEqual(
+            AXValueExtractors.inferTrackType(
+                fromCombinedText: "audio track lead vocal"
+            ),
+            .audio
+        )
     }
 
     func testNormalizedProjectTitleDropsViewSuffixAndFilePrefix() {
@@ -81,5 +103,21 @@ final class PlaceholderTests: XCTestCase {
         XCTAssertEqual(region.name, "MuseFlow Chord Guide")
         XCTAssertEqual(region.trackName, "Dark Soul")
         XCTAssertTrue(region.isLooped)
+    }
+
+    func testTransportDispatcherParsesTempoFromStringValues() {
+        let params: [String: Value] = [
+            "tempo": .string("95.0")
+        ]
+
+        XCTAssertEqual(TransportDispatcher.parseTempo(from: params), 95.0)
+    }
+
+    func testTransportDispatcherParsesTempoFromBpmFallback() {
+        let params: [String: Value] = [
+            "bpm": .string("96")
+        ]
+
+        XCTAssertEqual(TransportDispatcher.parseTempo(from: params), 96.0)
     }
 }

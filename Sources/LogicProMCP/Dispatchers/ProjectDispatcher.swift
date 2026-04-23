@@ -13,11 +13,9 @@ struct ProjectDispatcher {
             save_as -> { path: String }; \
             bounce -> {} (opens bounce dialog); \
             silent_bounce -> { filename?: String } (automated bounce to WAV, returns file path); \
-            export_selected_midi_bridge -> { output_path?: String } (prepares a human-confirmed MIDI export handoff for the current selection; does not press Save automatically); \
-            import_midi_bridge -> { path: String } (imports a MIDI file into the current project); \
-            replace_selected_region_midi_bridge -> { path: String } (deletes current selection, then imports MIDI file); \
-            launch/quit -> {} (app lifecycle); \
-            Others -> {}
+                export_selected_midi_bridge -> { output_path?: String } (prepares a human-confirmed MIDI export handoff for the current selection; does not press Save automatically); \
+                import_midi_bridge -> { path: String } (resets the playhead to 1.1.1.1, then imports a MIDI file into the current project); \
+                replace_selected_region_midi_bridge -> { path: String } (deletes current selection, resets the playhead to 1.1.1.1, then imports MIDI file).
             """,
         inputSchema: .object([
             "type": .string("object"),
@@ -379,8 +377,81 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text("{\"error\":\"MIDI file not found: \(escapeJSON(fileURL.path))\"}")], isError: true)
         }
 
+        let resetResult = resetImportCursorToProjectStart()
+        if resetResult.exitCode != 0 || resetResult.output.hasPrefix("ERROR:") {
+            let resetMessage = resetResult.output.hasPrefix("ERROR:")
+                ? String(resetResult.output.dropFirst(6))
+                : (resetResult.stderr.isEmpty ? resetResult.output : resetResult.stderr)
+            return CallTool.Result(content: [.text("{\"error\":\"Failed to reset import cursor: \(escapeJSON(resetMessage))\"}")], isError: true)
+        }
+
+        let finderPasteResult = importMIDIViaFinderPaste(path: fileURL.path)
+        if finderPasteResult.exitCode == 0, !finderPasteResult.output.hasPrefix("ERROR:") {
+            let json = """
+            {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","importAnchor":"1.1.1.1","importMethod":"finder_copy_paste","verification":"manual_or_followup_read_required"}
+            """
+            return CallTool.Result(content: [.text(json)], isError: false)
+        }
+
+        let dialogResult = importMIDIViaDialog(path: fileURL.path)
+        if dialogResult.output.hasPrefix("ERROR:") {
+            let dialogMessage = String(dialogResult.output.dropFirst(6))
+            let finderMessage = finderPasteResult.output.hasPrefix("ERROR:")
+                ? String(finderPasteResult.output.dropFirst(6))
+                : (finderPasteResult.stderr.isEmpty ? finderPasteResult.output : finderPasteResult.stderr)
+            return CallTool.Result(content: [.text("{\"error\":\"MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(escapeJSON(finderMessage)); dialog=\(escapeJSON(dialogMessage))\"}")], isError: true)
+        }
+        if dialogResult.exitCode != 0 {
+            let finderMessage = finderPasteResult.output.hasPrefix("ERROR:")
+                ? String(finderPasteResult.output.dropFirst(6))
+                : (finderPasteResult.stderr.isEmpty ? finderPasteResult.output : finderPasteResult.stderr)
+            let dialogMessage = dialogResult.stderr.isEmpty ? dialogResult.output : dialogResult.stderr
+            return CallTool.Result(content: [.text("{\"error\":\"MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(escapeJSON(finderMessage)); dialog=\(escapeJSON(dialogMessage))\"}")], isError: true)
+        }
+
+        let json = """
+        {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","importAnchor":"1.1.1.1","importMethod":"dialog_fallback","verification":"manual_or_followup_read_required"}
+        """
+        return CallTool.Result(content: [.text(json)], isError: false)
+    }
+
+    private static func importMIDIViaFinderPaste(path: String) -> OsaScriptResult {
+        let fileText = appleScriptEscaped(path)
         let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
-        let fileText = appleScriptEscaped(fileURL.path)
+        let script = """
+        set midiFile to POSIX file "\(fileText)"
+
+        tell application "Finder"
+            activate
+            reveal midiFile
+            delay 0.6
+            select midiFile
+        end tell
+
+        delay 0.6
+
+        tell application "System Events"
+            keystroke "c" using {command down}
+        end tell
+
+        delay 0.4
+
+        tell application "Logic Pro" to activate
+        delay 0.8
+
+        tell application "System Events"
+            tell process "\(processName)"
+                keystroke "v" using {command down}
+                delay 1.0
+            end tell
+        end tell
+        """
+        return runOsaScript(source: script)
+    }
+
+    private static func importMIDIViaDialog(path: String) -> OsaScriptResult {
+        let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
+        let fileText = appleScriptEscaped(path)
         let script = """
         tell application "Logic Pro" to activate
         delay 0.4
@@ -424,20 +495,27 @@ struct ProjectDispatcher {
             end tell
         end tell
         """
+        return runOsaScript(source: script)
+    }
 
-        let result = runOsaScript(source: script)
-        if result.output.hasPrefix("ERROR:") {
-            let message = String(result.output.dropFirst(6))
-            return CallTool.Result(content: [.text("{\"error\":\"\(escapeJSON(message))\"}")], isError: true)
-        }
-        if result.exitCode != 0 {
-            return CallTool.Result(content: [.text("{\"error\":\"\(escapeJSON(result.stderr.isEmpty ? result.output : result.stderr))\"}")], isError: true)
-        }
+    private static func resetImportCursorToProjectStart() -> OsaScriptResult {
+        let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Logic Pro" to activate
+        delay 0.3
 
-        let json = """
-        {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","verification":"manual_or_followup_read_required"}
+        tell application "System Events"
+            tell process "\(processName)"
+                keystroke "/"
+                delay 0.3
+                keystroke "1.1.1.1"
+                delay 0.1
+                key code 36
+                delay 0.6
+            end tell
+        end tell
         """
-        return CallTool.Result(content: [.text(json)], isError: false)
+        return runOsaScript(source: script)
     }
 
     private struct OsaScriptResult {

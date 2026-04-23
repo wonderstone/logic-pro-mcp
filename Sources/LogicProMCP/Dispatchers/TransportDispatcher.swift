@@ -2,6 +2,14 @@ import Foundation
 import MCP
 
 struct TransportDispatcher {
+    static func parseTempo(from params: [String: Value]) -> Double {
+        params["tempo"]?.doubleValue
+            ?? params["tempo"]?.stringValue.flatMap(Double.init)
+            ?? params["bpm"]?.doubleValue
+            ?? params["bpm"]?.stringValue.flatMap(Double.init)
+            ?? 120.0
+    }
+
     static let tool = Tool(
         name: "logic_transport",
         description: """
@@ -75,12 +83,10 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "set_tempo":
-            let tempo = params["tempo"]?.doubleValue
-                ?? params["bpm"]?.doubleValue
-                ?? 120.0
+            let tempo = parseTempo(from: params)
             let result = await router.route(
                 operation: "transport.set_tempo",
-                params: ["bpm": String(tempo)]
+                params: ["tempo": String(tempo), "bpm": String(tempo)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 

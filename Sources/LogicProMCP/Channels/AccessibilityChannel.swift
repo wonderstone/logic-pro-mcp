@@ -165,7 +165,7 @@ actor AccessibilityChannel: Channel {
         guard let transport = AXLogicProElements.getTransportBar() else {
             return .error("Cannot locate transport bar")
         }
-        // Find the tempo text field and set its value
+        // First prefer a dedicated tempo text field when Logic exposes one.
         let texts = AXHelpers.findAllDescendants(of: transport, role: kAXTextFieldRole, maxDepth: 4)
         for field in texts {
             let desc = AXHelpers.getDescription(field)?.lowercased() ?? ""
@@ -175,7 +175,21 @@ actor AccessibilityChannel: Channel {
                 return .success("{\"tempo\":\(tempoStr)}")
             }
         }
-        return .error("Cannot locate tempo field")
+
+        // On the current Logic Pro UI, tempo is exposed as an AXSlider labeled "Tempo".
+        let sliders = AXHelpers.findAllDescendants(of: transport, role: kAXSliderRole, maxDepth: 4)
+        for slider in sliders {
+            let desc = AXHelpers.getDescription(slider)?.lowercased() ?? ""
+            let title = AXHelpers.getTitle(slider)?.lowercased() ?? ""
+            if desc.contains("tempo") || desc.contains("bpm") || title.contains("tempo") || title.contains("bpm") {
+                guard AXHelpers.setAttribute(slider, kAXValueAttribute, NSNumber(value: Double(tempoStr) ?? 120.0)) else {
+                    return .error("Failed to set tempo slider")
+                }
+                return .success("{\"tempo\":\(tempoStr)}")
+            }
+        }
+
+        return .error("Cannot locate tempo field or slider")
     }
 
     private func setCycleRange(params: [String: String]) -> ChannelResult {
@@ -372,6 +386,13 @@ actor AccessibilityChannel: Channel {
         var info = ProjectInfo()
         info.name = Self.normalizedProjectTitle(rawTitle)
         info.trackCount = AXLogicProElements.allTrackHeaders().count
+        if let transport = AXLogicProElements.getTransportBar(),
+           let tempo = AXValueExtractors.extractTempoValue(from: transport) {
+            info.tempo = tempo
+        } else {
+            // Avoid reporting the model default as if it were a confirmed project tempo.
+            info.tempo = 0.0
+        }
         info.lastUpdated = Date()
         return encodeResult(info)
     }

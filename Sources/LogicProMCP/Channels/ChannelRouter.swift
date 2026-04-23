@@ -20,7 +20,7 @@ actor ChannelRouter {
         "transport.fast_forward":     [.coreMIDI, .cgEvent],
         "transport.toggle_cycle":     [.cgEvent, .accessibility],
         "transport.toggle_metronome": [.cgEvent, .accessibility],
-        "transport.set_tempo":        [.osc, .accessibility],
+        "transport.set_tempo":        [.accessibility, .osc],
         "transport.get_state":        [.accessibility],
         "transport.goto_position":    [.coreMIDI, .cgEvent],
         "transport.set_cycle_range":  [.accessibility],

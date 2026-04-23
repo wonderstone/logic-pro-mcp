@@ -112,6 +112,7 @@ enum AXValueExtractors {
     /// Read transport bar elements and build a TransportState.
     static func extractTransportState(from transport: AXUIElement) -> TransportState {
         var state = TransportState()
+        state.tempo = 0.0
 
         // Find and read transport button states
         let buttons = AXHelpers.findAllDescendants(of: transport, role: kAXButtonRole, maxDepth: 4)
@@ -155,6 +156,23 @@ enum AXValueExtractors {
 
         state.lastUpdated = Date()
         return state
+    }
+
+    static func extractTempoValue(from transport: AXUIElement) -> Double? {
+        let texts = AXHelpers.findAllDescendants(of: transport, role: kAXStaticTextRole, maxDepth: 4)
+        for text in texts {
+            guard let value = extractTextValue(text) else { continue }
+            let desc = AXHelpers.getDescription(text) ?? ""
+            let descLower = desc.lowercased()
+
+            if descLower.contains("tempo") || descLower.contains("bpm") {
+                let cleaned = value.replacingOccurrences(of: " BPM", with: "")
+                if let tempo = Double(cleaned) {
+                    return tempo
+                }
+            }
+        }
+        return nil
     }
 
     // MARK: - Private helpers
@@ -381,18 +399,21 @@ enum AXValueExtractors {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        if combined.contains("audio") { return .audio }
-        if combined.contains("instrument") || combined.contains("software") { return .softwareInstrument }
-        if combined.contains("drummer") { return .drummer }
-        if combined.contains("external") || combined.contains("midi") { return .externalMIDI }
-        if combined.contains("aux") { return .aux }
-        if combined.contains("bus") { return .bus }
-        if combined.contains("master") || combined.contains("stereo out") { return .master }
-        // Current Logic Pro track headers expose input monitoring + pan/volume,
-        // but not an explicit track-type label. Treat that as an audio-track heuristic.
-        if combined.contains("input monitoring") && combined.contains("volume") {
-            return .audio
-        }
+        return inferTrackType(fromCombinedText: combined)
+    }
+
+    static func inferTrackType(fromCombinedText combined: String) -> TrackType {
+        let normalized = combined.lowercased()
+
+        if normalized.contains("audio") { return .audio }
+        if normalized.contains("instrument") || normalized.contains("software") { return .softwareInstrument }
+        if normalized.contains("drummer") { return .drummer }
+        if normalized.contains("external") || normalized.contains("midi") { return .externalMIDI }
+        if normalized.contains("aux") { return .aux }
+        if normalized.contains("bus") { return .bus }
+        if normalized.contains("master") || normalized.contains("stereo out") { return .master }
+        // Logic's visible track headers often expose mute/solo/input monitoring/volume
+        // for every track type, so this surface is not honest enough to infer audio.
         return .unknown
     }
 
