@@ -6,7 +6,7 @@ struct SystemDispatcher {
         name: "logic_system",
         description: """
             Diagnostics and help for the Logic Pro MCP server. \
-            Commands: health, permissions, refresh_cache, help. \
+            Commands: \(CommandRegistry.commandList(for: "logic_system")). \
             Params by command: \
             help -> { category: String } (returns full param docs for a dispatcher); \
             refresh_cache -> {} (force AX re-poll); \
@@ -52,6 +52,14 @@ struct SystemDispatcher {
                 "transport_age_sec": String(format: "%.1f", snap.transportAge),
                 "track_count": String(snap.trackCount),
                 "project": snap.projectName,
+                "project_identity": snap.projectIdentity.value ?? "",
+                "project_identity_stability": snap.projectIdentity.stability.rawValue,
+                "generation": String(snap.generation),
+                "selection_generation": String(snap.selectionGeneration),
+                "selection_age_sec": String(format: "%.3f", snap.selectionAge),
+                "selection_max_age_sec": String(format: "%.3f", snap.selectionMaximumAge),
+                "selection_authority": String(snap.selectionAuthority),
+                "selection_identity_stability": snap.selectionIdentityStability.rawValue,
             ]
             // Manual JSON since mixed types
             let channelsJSON = encodeJSON(entries)
@@ -104,10 +112,8 @@ struct SystemDispatcher {
                   fast_forward      -> {} — Fast forward
                   toggle_cycle      -> {} — Toggle cycle/loop mode
                   toggle_metronome  -> {} — Toggle metronome
-                  toggle_count_in   -> {} — Toggle count-in
                   set_tempo         -> { tempo: Float } — Set BPM (20-999)
                   goto_position     -> { bar: Int } or { time: "HH:MM:SS:FF" }
-                  set_cycle_range   -> { start: Int, end: Int } — Bar numbers
 
                 Read state via resource: logic://transport/state
                 """
@@ -119,14 +125,12 @@ struct SystemDispatcher {
                   create_audio      -> {} — New audio track
                   create_instrument -> {} — New software instrument track
                   create_drummer    -> {} — New Drummer track
-                  create_external_midi -> {} — New external MIDI track
                   delete            -> { index: Int }
                   duplicate         -> { index: Int }
                   rename            -> { index: Int, name: String }
                   mute              -> { index: Int, enabled: Bool }
                   solo              -> { index: Int, enabled: Bool }
                   arm               -> { index: Int, enabled: Bool }
-                  set_color         -> { index: Int, color: Int } (0-24)
 
                 Read state via resources: logic://tracks, logic://tracks/{index}
                 """
@@ -137,13 +141,6 @@ struct SystemDispatcher {
                   set_volume        -> { track: Int, value: Float } (0.0-1.0)
                   set_pan           -> { track: Int, value: Float } (-1.0 to 1.0)
                   set_send          -> { track: Int, bus: Int, value: Float }
-                  set_output        -> { track: Int, output: String }
-                  set_input         -> { track: Int, input: String }
-                  set_master_volume -> { value: Float }
-                  toggle_eq         -> { track: Int }
-                  reset_strip       -> { track: Int }
-                  insert_plugin     -> { track: Int, slot: Int, name: String }
-                  bypass_plugin     -> { track: Int, slot: Int, bypassed: Bool }
 
                 Read state via resource: logic://mixer
                 """
@@ -155,14 +152,12 @@ struct SystemDispatcher {
                   send_chord        -> { notes: [Int], velocity: Int, channel: Int, duration_ms: Int }
                   send_cc           -> { controller: Int, value: Int, channel: Int }
                   send_program_change -> { program: Int, channel: Int }
-                  send_pitch_bend   -> { value: Int, channel: Int } (-8192 to 8191)
+                  send_pitch_bend   -> { value: Int, channel: Int } (0-16383)
                   send_aftertouch   -> { value: Int, channel: Int }
                   send_sysex        -> { bytes: [Int] } or { data: String }
-                  create_virtual_port -> { name: String }
                   mmc_play          -> {}
                   mmc_stop          -> {}
                   mmc_record        -> {}
-                  mmc_locate        -> { bar: Int } or { time: "HH:MM:SS:FF" }
 
                 Read ports via resource: logic://midi/ports
                 """
@@ -181,20 +176,14 @@ struct SystemDispatcher {
                   join              -> {} — Join selected regions
                   quantize          -> { value: String } ("1/4", "1/8", "1/16")
                   bounce_in_place   -> {} — Bounce selection to audio
-                  normalize         -> {} — Normalize audio
                   duplicate         -> {} — Duplicate selection
                 """
 
         case "navigate":
             return """
                 logic_navigate commands:
-                  goto_bar          -> { bar: Int }
-                  goto_marker       -> { index: Int } or { name: String }
                   create_marker     -> { name: String }
-                  delete_marker     -> { index: Int }
-                  rename_marker     -> { index: Int, name: String }
                   zoom_to_fit       -> {}
-                  set_zoom          -> { level: String } ("in", "out", "fit")
                   toggle_view       -> { view: String } (mixer, piano_roll, score,
                                        step_editor, library, inspector, automation)
                 """
@@ -205,9 +194,12 @@ struct SystemDispatcher {
                   new               -> {} — Create new project
                   open              -> { path: String } — Open .logicx file
                   save              -> {} — Save current project
-                  save_as           -> { path: String } — Save to new path
                   close             -> {} — Close project
                   bounce            -> {} — Open bounce dialog
+                  silent_bounce     -> { filename?: String }
+                  export_selected_midi_bridge -> { output_path?: String } — Manual handoff
+                  import_midi_bridge -> { path: String } — Dispatched, unverified
+                  replace_selected_region_midi_bridge -> { path: String } — Manual-required preflight
                   launch            -> {} — Launch Logic Pro
                   quit              -> {} — Quit Logic Pro
 

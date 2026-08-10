@@ -208,6 +208,7 @@ struct ResourceHandlers {
         let snap = await cache.snapshot()
         let permissions = PermissionChecker.check()
         let channelsJSON = encodeJSON(channels)
+        let projectIdentityJSON = encodeJSON(snap.projectIdentity)
         let json = """
             {
               "logic_pro_running": \(ProcessUtils.isLogicProRunning),
@@ -216,7 +217,14 @@ struct ResourceHandlers {
                 "poll_mode": "\(snap.pollMode)",
                 "transport_age_sec": \(String(format: "%.1f", snap.transportAge)),
                 "track_count": \(snap.trackCount),
-                "project": "\(snap.projectName)"
+                "project": "\(snap.projectName)",
+                "project_identity": \(projectIdentityJSON),
+                "generation": \(snap.generation),
+                "selection_generation": \(snap.selectionGeneration),
+                "selection_age_sec": \(String(format: "%.3f", snap.selectionAge)),
+                "selection_max_age_sec": \(String(format: "%.3f", snap.selectionMaximumAge)),
+                "selection_authority": \(snap.selectionAuthority),
+                "selection_identity_stability": "\(snap.selectionIdentityStability.rawValue)"
               },
               "permissions": {
                 "accessibility": \(permissions.accessibility),

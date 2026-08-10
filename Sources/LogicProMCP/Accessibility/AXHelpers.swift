@@ -63,6 +63,21 @@ enum AXHelpers {
         getAttribute(element, kAXIdentifierAttribute)
     }
 
+    /// Read the document URL exposed by an AX window. Logic Pro exposes this
+    /// as a string; accepting NSURL keeps the boundary safe across AX bridges.
+    static func getDocumentURLString(_ element: AXUIElement) -> String? {
+        guard let value: AnyObject = getAttribute(element, kAXDocumentAttribute) else {
+            return nil
+        }
+        if let string = value as? String {
+            return string
+        }
+        if let url = value as? NSURL {
+            return url.absoluteString
+        }
+        return nil
+    }
+
     /// Find a child element matching optional criteria.
     /// Searches direct children only (not recursive) for performance.
     static func findChild(
@@ -155,5 +170,37 @@ enum AXHelpers {
     /// Get the description of an element (kAXDescriptionAttribute).
     static func getDescription(_ element: AXUIElement) -> String? {
         getAttribute(element, kAXDescriptionAttribute)
+    }
+
+    /// Return the actions currently exposed by an element. Exact mutation
+    /// paths use this as a precondition instead of assuming that a visible
+    /// control is actionable.
+    static func actionNames(_ element: AXUIElement) -> [String] {
+        var raw: CFArray?
+        guard AXUIElementCopyActionNames(element, &raw) == .success,
+              let raw else {
+            return []
+        }
+        return (raw as NSArray).compactMap { $0 as? String }
+    }
+
+    /// Read a boolean AX attribute without treating an unavailable value as
+    /// true. This is deliberately optional so callers can fail closed when a
+    /// control does not expose the attribute.
+    static func getBooleanAttribute(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        guard let value: AnyObject = getAttribute(element, attribute) else {
+            return nil
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let string = value as? String {
+            switch string.lowercased() {
+            case "true", "yes", "1": return true
+            case "false", "no", "0": return false
+            default: return nil
+            }
+        }
+        return nil
     }
 }

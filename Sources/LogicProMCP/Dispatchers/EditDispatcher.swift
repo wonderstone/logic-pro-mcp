@@ -6,8 +6,7 @@ struct EditDispatcher {
         name: "logic_edit",
         description: """
             Editing actions in Logic Pro. \
-            Commands: undo, redo, cut, copy, paste, delete, select_all, \
-            split, join, quantize, bounce_in_place, normalize, duplicate. \
+            Commands: \(CommandRegistry.commandList(for: "logic_edit")). \
             Params by command: \
             quantize -> { value: String } ("1/4", "1/8", "1/16", etc.); \
             Most others -> {} (operate on current selection)
@@ -72,7 +71,13 @@ struct EditDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "quantize":
-            let value = params["value"]?.stringValue ?? "1/16"
+            if let error = CommandRegistry.validationError(tool: "logic_edit", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let value = params["value"]?.stringValue,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return CallTool.Result(content: [.text("quantize requires a non-empty 'value' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "edit.quantize",
                 params: ["value": value]
@@ -81,10 +86,6 @@ struct EditDispatcher {
 
         case "bounce_in_place":
             let result = await router.route(operation: "edit.bounce_in_place")
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "normalize":
-            let result = await router.route(operation: "edit.normalize")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "duplicate":
@@ -101,7 +102,7 @@ struct EditDispatcher {
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown edit command: \(command). Available: undo, redo, cut, copy, paste, delete, select_all, split, join, quantize, bounce_in_place, normalize, duplicate")],
+                content: [.text("Unknown edit command: \(command). Available: undo, redo, cut, copy, paste, delete, select_all, split, join, quantize, bounce_in_place, duplicate")],
                 isError: true
             )
         }

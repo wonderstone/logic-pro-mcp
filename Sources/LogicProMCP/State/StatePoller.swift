@@ -61,11 +61,13 @@ actor StatePoller {
             }
 
             if shouldPollTracks {
+                // Establish the project identity/generation before accepting the
+                // project-bound selection and visible resources for this cycle.
+                await pollProject(axChannel: axChannel, cache: cache)
                 await pollTracks(axChannel: axChannel, cache: cache)
                 await pollRegions(axChannel: axChannel, cache: cache)
                 await pollSelection(axChannel: axChannel, cache: cache)
                 await pollContext(axChannel: axChannel, cache: cache)
-                await pollProject(axChannel: axChannel, cache: cache)
             }
 
             // Sleep until next poll

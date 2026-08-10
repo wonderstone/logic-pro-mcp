@@ -32,6 +32,15 @@ struct ServerConfig: Sendable {
     /// Seconds of inactivity before switching to idle polling
     static let idleThreshold: TimeInterval = 30.0
 
+    // MARK: - Cached-state authority
+    /// Maximum age of a cached selection or project snapshot that may support a
+    /// guarded mutation preflight. This is intentionally shorter than idle polling.
+    static let selectionAuthorityMaxAge: TimeInterval = 5.0
+    static let projectAuthorityMaxAge: TimeInterval = selectionAuthorityMaxAge
+    /// P4A never treats an unbounded confirmation or stale before/after snapshot
+    /// as authority for an audio mutation.
+    static let acePlacementConfirmationMaxAge: TimeInterval = 300.0
+
     // MARK: - Verify-After-Write
     /// Delay after a mutation before re-reading state via AX
     static let verifyAfterWriteDelay: TimeInterval = 0.15
@@ -40,8 +49,15 @@ struct ServerConfig: Sendable {
     static let axOperationTimeout: TimeInterval = 2.0
     static let appleScriptTimeout: TimeInterval = 5.0
     static let channelHealthCheckTimeout: TimeInterval = 3.0
+    /// ACE import is split into independently receipted stages.  These are
+    /// budgets, not retry knobs: a timed-out UI stage has unknown mutation
+    /// truth and must never be dispatched again.
+    static let aceAudioUIImportTimeout: TimeInterval = 20.0
+    static let aceAudioTaggingTimeout: TimeInterval = 8.0
+    static let aceAudioReadbackTimeout: TimeInterval = 12.0
+    static let aceAudioReadbackAttempts = 8
 
     // MARK: - Logic Pro
     static let logicProBundleID = "com.apple.logic10"
-    static let logicProProcessName = "Logic Pro"
+    static let logicProProcessName = "Logic Pro X"
 }

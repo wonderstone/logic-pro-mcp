@@ -85,7 +85,11 @@ enum AXValueExtractors {
     }
 
     /// Read a track header and extract its basic state.
-    static func extractTrackState(from header: AXUIElement, index: Int) -> TrackState {
+    static func extractTrackState(
+        from header: AXUIElement,
+        index: Int,
+        projectIdentity: ProjectIdentity = .unknown
+    ) -> TrackState {
         let name = extractTrackName(from: header)
         let muted = extractTrackToggleState(from: header, prefix: "Mute") ?? false
         let soloed = extractTrackToggleState(from: header, prefix: "Solo") ?? false
@@ -95,7 +99,7 @@ enum AXValueExtractors {
         let pan = extractTrackPan(from: header) ?? 0.0
         let volume = extractTrackVolume(from: header) ?? 0.0
 
-        return TrackState(
+        var state = TrackState(
             id: index,
             name: name,
             type: trackType,
@@ -105,8 +109,11 @@ enum AXValueExtractors {
             isSelected: selected,
             volume: volume,
             pan: pan,
-            color: extractTrackColor(from: header)
+            color: extractTrackColor(from: header),
+            projectIdentity: projectIdentity
         )
+        bindOperationTagIdentity(to: &state)
+        return state
     }
 
     /// Read transport bar elements and build a TransportState.
@@ -189,7 +196,13 @@ enum AXValueExtractors {
         return parsed.isEmpty ? nil : parsed
     }
 
-    static func extractRegions(from contentRow: AXUIElement, trackIndex: Int, trackName: String) -> [RegionState] {
+    static func extractRegions(
+        from contentRow: AXUIElement,
+        trackIndex: Int,
+        trackName: String,
+        projectIdentity: ProjectIdentity = .unknown,
+        trackStableID: String? = nil
+    ) -> [RegionState] {
         let regionItems = AXHelpers.getChildren(contentRow).filter {
             AXHelpers.getRole($0) == "AXLayoutItem"
         }
@@ -203,7 +216,7 @@ enum AXValueExtractors {
                     && (AXHelpers.getDescription($0) ?? "").localizedCaseInsensitiveContains("loop")
                 })
 
-            return RegionState(
+            var state = RegionState(
                 id: "track-\(trackIndex)-region-\(offset)",
                 name: name,
                 trackIndex: trackIndex,
@@ -212,9 +225,58 @@ enum AXValueExtractors {
                 endPosition: "unknown",
                 length: "unknown",
                 isSelected: isSelected,
-                isLooped: hasLoopHandle
+                isLooped: hasLoopHandle,
+                projectIdentity: projectIdentity,
+                identityStability: .synthetic,
+                identityScope: "visible_only",
+                identityNote: "AX exposes region identity through visible track order; this synthetic ID is not a stable mutation key.",
+                trackStableID: trackStableID
             )
+            bindOperationTagIdentity(
+                to: &state,
+                trackName: trackName,
+                trackStableID: trackStableID
+            )
+            return state
         }
+    }
+
+    private static func bindOperationTagIdentity(to state: inout TrackState) {
+        guard let operationTag = OperationTagIdentity.operationTag(in: state.name),
+              let stableID = OperationTagIdentity.trackID(
+                projectIdentity: state.projectIdentity,
+                operationTag: operationTag
+              ) else {
+            return
+        }
+        state.stableID = stableID
+        state.identityStability = .stable
+        state.identityScope = "project_bound"
+        state.identityNote = "Stable project-bound track identity is derived from the explicit operation tag; visible order remains display-only."
+    }
+
+    private static func bindOperationTagIdentity(
+        to state: inout RegionState,
+        trackName: String,
+        trackStableID: String?
+    ) {
+        guard let regionTag = OperationTagIdentity.operationTag(in: state.name),
+              let trackTag = OperationTagIdentity.operationTag(in: trackName),
+              let stableID = OperationTagIdentity.regionID(
+                projectIdentity: state.projectIdentity,
+                trackOperationTag: trackTag,
+                regionOperationTag: regionTag
+              ) else {
+            return
+        }
+        state.stableID = stableID
+        state.trackStableID = trackStableID ?? OperationTagIdentity.trackID(
+            projectIdentity: state.projectIdentity,
+            operationTag: trackTag
+        )
+        state.identityStability = .stable
+        state.identityScope = "project_bound"
+        state.identityNote = "Stable project-bound region identity is derived from explicit operation tags; visible order remains display-only."
     }
 
     static func extractEditorState(from window: AXUIElement, rows: [AXUIElement]) -> EditorState {

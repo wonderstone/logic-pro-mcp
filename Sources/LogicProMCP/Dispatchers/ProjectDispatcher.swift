@@ -1,4 +1,3 @@
-import ApplicationServices
 import Foundation
 import MCP
 
@@ -7,15 +6,25 @@ struct ProjectDispatcher {
         name: "logic_project",
         description: """
             Project lifecycle in Logic Pro. \
-            Commands: new, open, save, save_as, close, bounce, silent_bounce, export_selected_midi_bridge, import_midi_bridge, replace_selected_region_midi_bridge, launch, quit. \
+            Commands: \(CommandRegistry.commandList(for: "logic_project")). \
             Params by command: \
             open -> { path: String }; \
-            save_as -> { path: String }; \
             bounce -> {} (opens bounce dialog); \
             silent_bounce -> { filename?: String } (automated bounce to WAV, returns file path); \
                 export_selected_midi_bridge -> { output_path?: String } (prepares a human-confirmed MIDI export handoff for the current selection; does not press Save automatically); \
-                import_midi_bridge -> { path: String } (resets the playhead to 1.1.1.1, then imports a MIDI file into the current project); \
-                replace_selected_region_midi_bridge -> { path: String } (deletes current selection, resets the playhead to 1.1.1.1, then imports MIDI file).
+                import_midi_bridge -> { path: String } (dispatches a MIDI import after resetting the playhead; result remains unverified); \
+                replace_selected_region_midi_bridge -> { path: String } (preflight only; automatic replacement is manual-required until rollback and postcondition proof exist); \
+                bind_disposable_project -> { path: String, sha256: String, expires_at: String } (local expiring path/digest binding; does not open or mutate Logic); \
+                verify_keeper_digest -> { path: String, sha256?: String, native_source_basename?: String } (read-only separate keeper digest receipt); \
+                preview_ace_audio_placement -> { handoff_json: String } or explicit plan fields (read-only preview); \
+                authorize_ace_audio_placement -> { plan_id: String, confirmation_id: String, confirmed_by: String, confirmed_at: String }; \
+                place_ace_audio -> { plan_id: String } (new-track-only guarded dispatch with fresh readback); \
+                tag_ace_audio_after_import -> { exact prior single-dispatch proof plus source/tag/count/confirmation fields } (tag-only continuation; never imports); \
+                verify_ace_audio_placement -> { target_project_path: String, asset_path: String, asset_sha256: String, keeper_digest_receipt_json: String } (fresh-process source/identity/placement readback only); \
+                rollback_ace_audio_placement -> { plan_id: String, rollback_confirmation_id: String, rollback_confirmed_by: String, rollback_confirmed_at: String } (bounded created-layer rollback only); \
+                adopt_ace_audio_delta -> { exact P5G delta spec plus confirmation fields } (no import; removes only the exact named _1 duplicate, tags the remaining source, saves, and proves AX geometry); \
+                verify_ace_audio_delta -> { exact P5G delta spec } (fresh-process tag/source/placement verification only); \
+                rollback_ace_audio_delta -> { exact P5G delta spec } (manual-required tag-bounded rollback evidence; no automatic delete).
             """,
         inputSchema: .object([
             "type": .string("object"),
@@ -45,10 +54,10 @@ struct ProjectDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "open":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("open requires 'path' param")], isError: true)
+            if let error = CommandRegistry.validationError(tool: "logic_project", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
             }
+            let path = params["path"]?.stringValue ?? ""
             let result = await router.route(
                 operation: "project.open",
                 params: ["path": path]
@@ -57,17 +66,6 @@ struct ProjectDispatcher {
 
         case "save":
             let result = await router.route(operation: "project.save")
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "save_as":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("save_as requires 'path' param")], isError: true)
-            }
-            let result = await router.route(
-                operation: "project.save_as",
-                params: ["path": path]
-            )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "close":
@@ -87,22 +85,96 @@ struct ProjectDispatcher {
             return await exportSelectedMIDI(outputPath: outputPath, cache: cache)
 
         case "import_midi_bridge":
-            let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("import_midi_bridge requires 'path' param")], isError: true)
+            if let error = CommandRegistry.validationError(tool: "logic_project", command: command, params: params) {
+                let snapshot = await cache.authoritySnapshot()
+                return operationResult(
+                    operation: command,
+                    parameters: [:],
+                    status: "rejected",
+                    mutation: "not_started",
+                    verification: "unavailable",
+                    error: error,
+                    preconditions: operationPreconditions(
+                        snapshot: snapshot,
+                        sourceValid: false,
+                        failures: [error]
+                    ),
+                    projectIdentity: snapshot.projectIdentity,
+                    generation: snapshot.generation
+                )
             }
-            return await importMIDI(path: path)
+            let path = params["path"]?.stringValue ?? ""
+            return await importMIDI(path: path, cache: cache)
 
         case "replace_selected_region_midi_bridge":
+            if let error = CommandRegistry.validationError(tool: "logic_project", command: command, params: params) {
+                let snapshot = await cache.authoritySnapshot()
+                return operationResult(
+                    operation: command,
+                    parameters: [:],
+                    status: "rejected",
+                    mutation: "not_started",
+                    verification: "unavailable",
+                    error: error,
+                    preconditions: operationPreconditions(
+                        snapshot: snapshot,
+                        sourceValid: false,
+                        failures: [error]
+                    ),
+                    projectIdentity: snapshot.projectIdentity,
+                    generation: snapshot.generation
+                )
+            }
             let path = params["path"]?.stringValue ?? ""
-            guard !path.isEmpty else {
-                return CallTool.Result(content: [.text("replace_selected_region_midi_bridge requires 'path' param")], isError: true)
+            if let sourceError = validateMIDIInput(path: path) {
+                let snapshot = await cache.authoritySnapshot()
+                return operationResult(
+                    operation: command,
+                    parameters: ["path": path],
+                    status: "rejected",
+                    mutation: "not_started",
+                    verification: "unavailable",
+                    error: sourceError,
+                    preconditions: operationPreconditions(
+                        snapshot: snapshot,
+                        sourcePath: path,
+                        sourceValid: false,
+                        failures: [sourceError]
+                    ),
+                    projectIdentity: snapshot.projectIdentity,
+                    generation: snapshot.generation,
+                    sourcePath: path
+                )
             }
-            let deleteResult = await router.route(operation: "edit.delete")
-            guard deleteResult.isSuccess else {
-                return CallTool.Result(content: [.text("Failed to delete current selection before import: \(deleteResult.message)")], isError: true)
-            }
-            return await importMIDI(path: path, replaceMode: true)
+            let authority = await cache.selectionAuthority()
+            let statusMessage = authority.authorized
+                ? "Automatic replacement is disabled because rollback and reliable postcondition verification are unavailable."
+                : "Automatic replacement was not authorized: \(authority.message)"
+            return operationResult(
+                operation: command,
+                parameters: ["path": path],
+                status: "manual_required",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: statusMessage,
+                preconditions: operationPreconditions(
+                    authority: authority,
+                    sourcePath: path,
+                    sourceValid: true
+                ),
+                projectIdentity: authority.projectIdentity,
+                generation: authority.generation,
+                sourcePath: path,
+                selectedRegionID: authority.selectedRegionIDs.first
+            )
+
+        case "bind_disposable_project", "verify_keeper_digest", "preview_ace_audio_placement", "authorize_ace_audio_placement", "place_ace_audio", "tag_ace_audio_after_import", "verify_ace_audio_placement", "rollback_ace_audio_placement", "adopt_ace_audio_delta", "verify_ace_audio_delta", "rollback_ace_audio_delta":
+            return await ACEAudioPlacementCoordinator.handle(
+                command: command,
+                params: params,
+                router: router,
+                cache: cache
+            )
 
         case "launch":
             if ProcessUtils.isLogicProRunning {
@@ -137,8 +209,9 @@ struct ProjectDispatcher {
             }
 
         default:
+            let available = CommandRegistry.commandList(for: "logic_project")
             return CallTool.Result(
-                content: [.text("Unknown project command: \(command). Available: new, open, save, save_as, close, bounce, silent_bounce, export_selected_midi_bridge, import_midi_bridge, replace_selected_region_midi_bridge, launch, quit")],
+                content: [.text("Unknown project command: \(command). Available: \(available)")],
                 isError: true
             )
         }
@@ -149,15 +222,16 @@ struct ProjectDispatcher {
     /// Automated bounce: opens bounce dialog, sets WAVE format, sets filename, clicks Bounce.
     /// Uses osascript subprocess (not NSAppleScript) to ensure TCC/Apple Events permissions work.
     private static func silentBounce(filename: String) async -> CallTool.Result {
+        guard let logicPID = ProcessUtils.logicProPID() else {
+            return CallTool.Result(content: [.text("{\"error\":\"Logic Pro target process is unavailable; no bounce started\"}")], isError: true)
+        }
         let escaped = filename.replacingOccurrences(of: "\"", with: "\\\"")
-        let processName = ServerConfig.logicProProcessName.replacingOccurrences(of: "\"", with: "\\\"")
 
         let script = """
-        tell application "Logic Pro" to activate
-        delay 0.5
-
         tell application "System Events"
-            tell process "\(processName)"
+            tell first process whose unix id is \(logicPID)
+                set frontmost to true
+                delay 0.5
 
                 -- Step 1: Open Bounce dialog via menu (with retry)
                 set menuClicked to false
@@ -189,14 +263,18 @@ struct ProjectDispatcher {
 
                 -- Step 2: Wait for Bounce dialog to appear (increased timeout)
                 set dialogFound to false
+                set bounceWin to missing value
                 repeat 30 times
                     try
-                        set w to window 1
-                        set wName to name of w as text
-                        if wName contains "Bounce" then
-                            set dialogFound to true
-                            exit repeat
-                        end if
+                        repeat with candidate in windows
+                            set candidateWindow to contents of candidate
+                            if (name of candidateWindow as text) contains "Bounce" then
+                                set bounceWin to candidateWindow
+                                set dialogFound to true
+                                exit repeat
+                            end if
+                        end repeat
+                        if dialogFound then exit repeat
                     end try
                     delay 0.5
                 end repeat
@@ -206,7 +284,6 @@ struct ProjectDispatcher {
                 end if
 
                 -- Step 3: Params dialog \u{2014} ensure Wave format, click OK
-                set bounceWin to window 1
                 set hasOK to false
                 try
                     set okBtn to button "OK" of bounceWin
@@ -237,16 +314,53 @@ struct ProjectDispatcher {
 
                     click button "OK" of bounceWin
                     delay 1.5
+                else
+                    -- Logic's current Bounce panel can expose its controls
+                    -- only through a custom split group. Return is its
+                    -- default OK action; do not wait for a direct AX button
+                    -- that is not present.
+                    key code 36
+                    delay 1.5
                 end if
 
                 -- Step 4: Wait for save dialog (has Bounce button)
                 set saveReady to false
+                set saveWin to missing value
+                set saveField to missing value
+                set saveButton to missing value
                 repeat 15 times
                     try
-                        set w to window 1
-                        set bb to button "Bounce" of w
-                        set saveReady to true
-                        exit repeat
+                        repeat with candidate in windows
+                            set candidateWindow to contents of candidate
+                            if (name of candidateWindow as text) contains "Bounce" then
+                                try
+                                    set splitGroup to first UI element of candidateWindow
+                                    repeat with element in UI elements of splitGroup
+                                        set candidateElement to contents of element
+                                        set candidateRole to role of candidateElement as text
+                                        if candidateRole is "AXTextField" then
+                                            try
+                                                if (name of candidateElement as text) is "Save As:" then
+                                                    set saveField to candidateElement
+                                                end if
+                                            end try
+                                        else if candidateRole is "AXButton" then
+                                            try
+                                                if (name of candidateElement as text) is "Bounce" then
+                                                    set saveButton to candidateElement
+                                                end if
+                                            end try
+                                        end if
+                                    end repeat
+                                    if saveField is not missing value and saveButton is not missing value then
+                                        set saveWin to candidateWindow
+                                        set saveReady to true
+                                        exit repeat
+                                    end if
+                                end try
+                            end if
+                        end repeat
+                        if saveReady then exit repeat
                     end try
                     delay 0.5
                 end repeat
@@ -256,27 +370,29 @@ struct ProjectDispatcher {
                 end if
 
                 -- Step 5: Set filename
-                set value of text field 1 of window 1 to "\(escaped)"
+                set value of saveField to "\(escaped)"
                 delay 0.3
 
                 -- Step 6: Click Bounce
-                click button "Bounce" of window 1
+                click saveButton
 
                 -- Step 7: Wait for bounce to complete (dialog closes)
                 set bounceComplete to false
                 repeat 120 times
                     delay 0.5
-                    try
-                        set w to window 1
-                        set wName to name of w as text
-                        if wName does not contain "Bounce" then
-                            set bounceComplete to true
-                            exit repeat
-                        end if
-                    on error
+                    set bounceWindowStillOpen to false
+                    repeat with candidate in windows
+                        try
+                            if (name of candidate as text) contains "Bounce" then
+                                set bounceWindowStillOpen to true
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if not bounceWindowStillOpen then
                         set bounceComplete to true
                         exit repeat
-                    end try
+                    end if
                 end repeat
 
                 if bounceComplete then
@@ -338,6 +454,23 @@ struct ProjectDispatcher {
         outputPath: String?,
         cache: StateCache
     ) async -> CallTool.Result {
+        let selection = await cache.getSelection()
+        let readback = await cache.selectionReadback()
+        if !readback.authorized {
+            let snapshot = await cache.authoritySnapshot(at: readback.checkedAt)
+            return operationResult(
+                operation: "export_selected_midi_bridge",
+                parameters: outputPath.map { ["output_path": $0] } ?? [:],
+                status: "rejected",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: "export_selected_midi_bridge \(readback.message)",
+                preconditions: operationPreconditions(authority: readback, snapshot: snapshot),
+                projectIdentity: readback.projectIdentity,
+                generation: readback.generation
+            )
+        }
+
         let requestedURL: URL
         if let outputPath, !outputPath.isEmpty {
             requestedURL = URL(fileURLWithPath: outputPath)
@@ -350,10 +483,27 @@ struct ProjectDispatcher {
         do {
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         } catch {
-            return CallTool.Result(content: [.text("{\"error\":\"Failed to create export directory: \(escapeJSON(error.localizedDescription))\"}")], isError: true)
+            let snapshot = await cache.authoritySnapshot(at: readback.checkedAt)
+            let message = "Failed to create export directory: \(error.localizedDescription)"
+            return operationResult(
+                operation: "export_selected_midi_bridge",
+                parameters: outputPath.map { ["output_path": $0] } ?? [:],
+                status: "rejected",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: message,
+                preconditions: operationPreconditions(
+                    authority: readback,
+                    snapshot: snapshot,
+                    sourcePath: requestedURL.path,
+                    sourceValid: false,
+                    failures: [message]
+                ),
+                projectIdentity: snapshot.projectIdentity,
+                generation: snapshot.generation
+            )
         }
 
-        let selection = await cache.getSelection()
         let project = await cache.getProject()
         let receipt = MIDIBridgeExportState(
             status: "manual_required",
@@ -365,16 +515,72 @@ struct ProjectDispatcher {
         )
         await cache.updateLastMIDIBridgeExport(receipt)
 
-        let json = """
-        {"success":false,"status":"manual_required","requestedPath":"\(escapeJSON(requestedURL.path))","selectedRegionCount":\(selection.selectedRegionCount),"selectedRegionNames":\(jsonArray(selection.selectedRegionNames)),"error":"Human must complete the Logic Pro Save MIDI dialog manually.","recommended_next_step":"In Logic Pro, export the current selection as MIDI and save it to the requested path, then retry the read or patch step with the saved file.","scope":"selected_region_only"}
-        """
-        return CallTool.Result(content: [.text(json)], isError: false)
+        let snapshot = await cache.authoritySnapshot(at: readback.checkedAt)
+        let message = "Human must complete the Logic Pro Save MIDI dialog manually."
+        return operationResult(
+            operation: "export_selected_midi_bridge",
+            parameters: ["output_path": requestedURL.path],
+            status: "manual_required",
+            mutation: "not_started",
+            verification: "unavailable",
+            error: message,
+            preconditions: operationPreconditions(
+                authority: readback,
+                snapshot: snapshot,
+                sourcePath: requestedURL.path,
+                sourceValid: true
+            ),
+            projectIdentity: snapshot.projectIdentity,
+            generation: snapshot.generation,
+            requestedPath: requestedURL.path,
+            selectedRegionCount: selection.selectedRegionCount,
+            selectedRegionNames: selection.selectedRegionNames,
+            recommendedNextStep: "In Logic Pro, export the current selection as MIDI and save it to the requested path, then retry the read or patch step with the saved file.",
+            scope: "selected_region_only"
+        )
     }
 
-    private static func importMIDI(path: String, replaceMode: Bool = false) async -> CallTool.Result {
+    private static func importMIDI(path: String, cache: StateCache) async -> CallTool.Result {
         let fileURL = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return CallTool.Result(content: [.text("{\"error\":\"MIDI file not found: \(escapeJSON(fileURL.path))\"}")], isError: true)
+        let initialSnapshot = await cache.authoritySnapshot()
+        if let sourceError = validateMIDIInput(path: path) {
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "rejected",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: sourceError,
+                preconditions: operationPreconditions(
+                    snapshot: initialSnapshot,
+                    sourcePath: path,
+                    sourceValid: false,
+                    failures: [sourceError]
+                ),
+                projectIdentity: initialSnapshot.projectIdentity,
+                generation: initialSnapshot.generation,
+                path: path
+            )
+        }
+
+        let projectAuthority = await cache.projectAuthority()
+        guard projectAuthority.authorized else {
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "rejected",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: projectAuthority.message,
+                preconditions: operationPreconditions(
+                    authority: projectAuthority,
+                    sourcePath: path,
+                    sourceValid: true
+                ),
+                projectIdentity: projectAuthority.projectIdentity,
+                generation: projectAuthority.generation,
+                path: path
+            )
         }
 
         let resetResult = resetImportCursorToProjectStart()
@@ -382,15 +588,48 @@ struct ProjectDispatcher {
             let resetMessage = resetResult.output.hasPrefix("ERROR:")
                 ? String(resetResult.output.dropFirst(6))
                 : (resetResult.stderr.isEmpty ? resetResult.output : resetResult.stderr)
-            return CallTool.Result(content: [.text("{\"error\":\"Failed to reset import cursor: \(escapeJSON(resetMessage))\"}")], isError: true)
+            let message = "Failed to reset import cursor: \(resetMessage)"
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "failed",
+                mutation: "not_started",
+                verification: "unavailable",
+                error: message,
+                preconditions: operationPreconditions(
+                    authority: projectAuthority,
+                    sourcePath: path,
+                    sourceValid: true,
+                    failures: [message]
+                ),
+                projectIdentity: projectAuthority.projectIdentity,
+                generation: projectAuthority.generation,
+                path: path
+            )
         }
 
         let finderPasteResult = importMIDIViaFinderPaste(path: fileURL.path)
         if finderPasteResult.exitCode == 0, !finderPasteResult.output.hasPrefix("ERROR:") {
-            let json = """
-            {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","importAnchor":"1.1.1.1","importMethod":"finder_copy_paste","verification":"manual_or_followup_read_required"}
-            """
-            return CallTool.Result(content: [.text(json)], isError: false)
+            let message = "MIDI import was dispatched, but resulting region identity, position, and source could not be verified; do not continue automatically."
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "dispatched_unverified",
+                mutation: "dispatched",
+                verification: "not_verified",
+                error: message,
+                preconditions: operationPreconditions(
+                    authority: projectAuthority,
+                    sourcePath: path,
+                    sourceValid: true
+                ),
+                projectIdentity: projectAuthority.projectIdentity,
+                generation: projectAuthority.generation,
+                path: path,
+                mode: "import_only",
+                importAnchor: "1.1.1.1",
+                importMethod: "finder_copy_paste"
+            )
         }
 
         let dialogResult = importMIDIViaDialog(path: fileURL.path)
@@ -399,20 +638,188 @@ struct ProjectDispatcher {
             let finderMessage = finderPasteResult.output.hasPrefix("ERROR:")
                 ? String(finderPasteResult.output.dropFirst(6))
                 : (finderPasteResult.stderr.isEmpty ? finderPasteResult.output : finderPasteResult.stderr)
-            return CallTool.Result(content: [.text("{\"error\":\"MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(escapeJSON(finderMessage)); dialog=\(escapeJSON(dialogMessage))\"}")], isError: true)
+            let message = "MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(finderMessage); dialog=\(dialogMessage)"
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "failed",
+                mutation: "dispatched",
+                verification: "unavailable",
+                error: message,
+                preconditions: operationPreconditions(
+                    authority: projectAuthority,
+                    sourcePath: path,
+                    sourceValid: true,
+                    failures: [message]
+                ),
+                projectIdentity: projectAuthority.projectIdentity,
+                generation: projectAuthority.generation,
+                path: path,
+                mode: "import_only"
+            )
         }
         if dialogResult.exitCode != 0 {
             let finderMessage = finderPasteResult.output.hasPrefix("ERROR:")
                 ? String(finderPasteResult.output.dropFirst(6))
                 : (finderPasteResult.stderr.isEmpty ? finderPasteResult.output : finderPasteResult.stderr)
             let dialogMessage = dialogResult.stderr.isEmpty ? dialogResult.output : dialogResult.stderr
-            return CallTool.Result(content: [.text("{\"error\":\"MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(escapeJSON(finderMessage)); dialog=\(escapeJSON(dialogMessage))\"}")], isError: true)
+            let message = "MIDI import failed via finder_copy_paste and dialog fallback. finder_copy_paste=\(finderMessage); dialog=\(dialogMessage)"
+            return operationResult(
+                operation: "import_midi_bridge",
+                parameters: ["path": path],
+                status: "failed",
+                mutation: "dispatched",
+                verification: "unavailable",
+                error: message,
+                preconditions: operationPreconditions(
+                    authority: projectAuthority,
+                    sourcePath: path,
+                    sourceValid: true,
+                    failures: [message]
+                ),
+                projectIdentity: projectAuthority.projectIdentity,
+                generation: projectAuthority.generation,
+                path: path,
+                mode: "import_only"
+            )
         }
 
-        let json = """
-        {"success":true,"path":"\(escapeJSON(fileURL.path))","mode":"\(replaceMode ? "replace_selected_region" : "import_only")","importAnchor":"1.1.1.1","importMethod":"dialog_fallback","verification":"manual_or_followup_read_required"}
-        """
-        return CallTool.Result(content: [.text(json)], isError: false)
+        let message = "MIDI import was dispatched, but resulting region identity, position, and source could not be verified; do not continue automatically."
+        return operationResult(
+            operation: "import_midi_bridge",
+            parameters: ["path": path],
+            status: "dispatched_unverified",
+            mutation: "dispatched",
+            verification: "not_verified",
+            error: message,
+            preconditions: operationPreconditions(
+                authority: projectAuthority,
+                sourcePath: path,
+                sourceValid: true
+            ),
+            projectIdentity: projectAuthority.projectIdentity,
+            generation: projectAuthority.generation,
+            path: path,
+            mode: "import_only",
+            importAnchor: "1.1.1.1",
+            importMethod: "dialog_fallback"
+        )
+    }
+
+    /// Validate every source-file precondition before a Logic-facing import or replace
+    /// flow can perform any UI mutation.
+    private static func validateMIDIInput(path: String) -> String? {
+        let fileURL = URL(fileURLWithPath: path)
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return "MIDI source file not found: \(fileURL.path); no mutation started"
+        }
+        guard fileManager.isReadableFile(atPath: fileURL.path) else {
+            return "MIDI source file is not readable: \(fileURL.path); no mutation started"
+        }
+        do {
+            let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                return "MIDI source path is not a regular file: \(fileURL.path); no mutation started"
+            }
+            let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            guard size > 0 else {
+                return "MIDI source file is empty: \(fileURL.path); no mutation started"
+            }
+        } catch {
+            return "MIDI source file cannot be inspected: \(fileURL.path); no mutation started"
+        }
+        return nil
+    }
+
+    private static func operationResult(
+        operation: String,
+        parameters: [String: String],
+        status: String,
+        mutation: String,
+        verification: String,
+        success: Bool = false,
+        error: String?,
+        preconditions: OperationPreconditions,
+        projectIdentity: ProjectIdentity,
+        generation: UInt64,
+        path: String? = nil,
+        sourcePath: String? = nil,
+        selectedRegionID: String? = nil,
+        requestedPath: String? = nil,
+        selectedRegionCount: Int? = nil,
+        selectedRegionNames: [String]? = nil,
+        mode: String? = nil,
+        importAnchor: String? = nil,
+        importMethod: String? = nil,
+        recommendedNextStep: String? = nil,
+        scope: String? = nil
+    ) -> CallTool.Result {
+        let receipt = OperationReceipt(
+            operation: operation,
+            parameters: parameters,
+            preconditions: preconditions,
+            mutation: mutation,
+            verification: verification,
+            projectIdentity: projectIdentity,
+            generation: generation,
+            status: status,
+            success: success,
+            error: error,
+            path: path,
+            sourcePath: sourcePath,
+            selectedRegionID: selectedRegionID,
+            requestedPath: requestedPath,
+            selectedRegionCount: selectedRegionCount,
+            selectedRegionNames: selectedRegionNames,
+            mode: mode,
+            importAnchor: importAnchor,
+            importMethod: importMethod,
+            recommendedNextStep: recommendedNextStep,
+            scope: scope
+        )
+        return CallTool.Result(
+            content: [.text(encodeCompactJSON(receipt))],
+            isError: !success
+        )
+    }
+
+    private static func operationPreconditions(
+        authority: StateAuthorityCheck? = nil,
+        snapshot: CacheAuthoritySnapshot? = nil,
+        sourcePath: String? = nil,
+        sourceValid: Bool? = nil,
+        failures: [String] = []
+    ) -> OperationPreconditions {
+        let projectIdentity = authority?.projectIdentity ?? snapshot?.projectIdentity ?? .unknown
+        let selectedProjectIdentity = authority?.selectionProjectIdentity
+            ?? snapshot?.selectionProjectIdentity
+            ?? .unknown
+        let selectedRegionIDs = authority?.selectedRegionIDs ?? []
+        let authorityFailures = authority.map { $0.authorized ? [] : [$0.reasonCode] } ?? []
+        let combinedFailures = Array(Set(failures + authorityFailures)).sorted()
+
+        return OperationPreconditions(
+            stateAuthority: authority.map { $0.authorized ? "passed" : "rejected" } ?? "not_checked",
+            sourcePath: sourcePath,
+            sourceValid: sourceValid,
+            selectionFresh: authority?.selectionFresh ?? snapshot.map { $0.selectionAgeSeconds <= $0.selectionMaximumAgeSeconds },
+            selectionAgeSeconds: authority?.observedAgeSeconds ?? snapshot?.selectionAgeSeconds,
+            maximumAgeSeconds: authority?.maximumAgeSeconds ?? snapshot?.selectionMaximumAgeSeconds,
+            selectedRegionCount: authority?.selectedRegionCount,
+            selectedRegionIDs: selectedRegionIDs,
+            selectedRegionIdentityStability: authority?.selectedRegionIdentityStability
+                ?? snapshot?.selectionIdentityStability
+                ?? .unknown,
+            projectIdentity: projectIdentity,
+            selectionProjectIdentity: selectedProjectIdentity,
+            projectIdentityKnown: projectIdentity.isKnown,
+            projectIdentityMatches: authority?.projectIdentityMatches,
+            generationCompatible: authority?.generationCompatible,
+            cacheGeneration: authority?.generation ?? snapshot?.generation ?? 0,
+            stateGeneration: authority?.selectionGeneration ?? snapshot?.selectionGeneration ?? 0,
+            failures: combinedFailures
+        )
     }
 
     private static func importMIDIViaFinderPaste(path: String) -> OsaScriptResult {
@@ -578,8 +985,4 @@ struct ProjectDispatcher {
             .replacingOccurrences(of: "\t", with: "\\t")
     }
 
-    private static func jsonArray(_ values: [String]) -> String {
-        let encoded = values.map { "\"\(escapeJSON($0))\"" }.joined(separator: ",")
-        return "[\(encoded)]"
-    }
 }

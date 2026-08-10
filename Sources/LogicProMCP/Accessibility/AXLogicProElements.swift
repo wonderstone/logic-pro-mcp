@@ -17,6 +17,30 @@ enum AXLogicProElements {
         return AXHelpers.getAttribute(app, kAXMainWindowAttribute)
     }
 
+    /// Return the front project window used for AXDocument identity. If AX
+    /// cannot identify a focused/main window, multiple document windows are
+    /// ambiguous and are deliberately rejected.
+    static func frontProjectWindow() -> AXUIElement? {
+        guard let app = appRoot() else { return nil }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(app, kAXWindowsAttribute) ?? []
+        let documentWindows = windows.filter { AXHelpers.getDocumentURLString($0) != nil }
+
+        if let focused: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedWindowAttribute),
+           AXHelpers.getDocumentURLString(focused) != nil {
+            return focused
+        }
+        if let main: AXUIElement = AXHelpers.getAttribute(app, kAXMainWindowAttribute),
+           AXHelpers.getDocumentURLString(main) != nil {
+            return main
+        }
+
+        // Some Logic Pro versions expose the focused/main AX element as an
+        // application proxy while the real document window is only present in
+        // AXWindows. Accept exactly one document-bearing window; multiple
+        // candidates remain ambiguous and fail closed.
+        return documentWindows.count == 1 ? documentWindows[0] : nil
+    }
+
     // MARK: - Transport
 
     /// Find the transport bar area (toolbar/group containing play, stop, record, etc.)
@@ -263,10 +287,46 @@ enum AXLogicProElements {
     }
 
     /// Find the track name text field on a header.
-    static func findTrackNameField(trackIndex: Int) -> AXUIElement? {
+    static func findTrackNameField(trackIndex: Int, currentName: String? = nil) -> AXUIElement? {
         guard let header = findTrackHeader(at: trackIndex) else { return nil }
-        return AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 4)
-            ?? AXHelpers.findDescendant(of: header, role: kAXTextFieldRole, maxDepth: 4)
+        let fields = AXHelpers.findAllDescendants(of: header, role: kAXTextFieldRole, maxDepth: 4)
+        if let currentName,
+           let matching = fields.first(where: {
+               AXHelpers.getDescription($0) == currentName
+                   || AXHelpers.getValue($0) as? String == currentName
+                   || AXHelpers.getTitle($0) == currentName
+           }) {
+            return matching
+        }
+        return fields.first
+            ?? AXHelpers.findDescendant(of: header, role: kAXStaticTextRole, maxDepth: 4)
+    }
+
+    /// Find a visible region name field by temporary row/region position.
+    /// The indices are only a bounded precondition for a just-created layer;
+    /// callers must never expose them as stable identity.
+    static func findRegionNameField(
+        trackIndex: Int,
+        regionIndex: Int,
+        currentName: String? = nil
+    ) -> AXUIElement? {
+        guard let row = findTrackContentRow(at: trackIndex) else { return nil }
+        let regions = AXHelpers.getChildren(row).filter { AXHelpers.getRole($0) == "AXLayoutItem" }
+        guard regionIndex >= 0 && regionIndex < regions.count else { return nil }
+        let fields = AXHelpers.findAllDescendants(
+            of: regions[regionIndex],
+            role: kAXTextFieldRole,
+            maxDepth: 3
+        )
+        if let currentName,
+           let matching = fields.first(where: {
+               AXHelpers.getDescription($0) == currentName
+                   || AXHelpers.getValue($0) as? String == currentName
+                   || AXHelpers.getTitle($0) == currentName
+           }) {
+            return matching
+        }
+        return fields.first
     }
 
     // MARK: - Helpers

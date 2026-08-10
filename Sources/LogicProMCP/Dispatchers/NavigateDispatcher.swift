@@ -6,15 +6,9 @@ struct NavigateDispatcher {
         name: "logic_navigate",
         description: """
             Navigation and markers in Logic Pro. \
-            Commands: goto_bar, goto_marker, create_marker, delete_marker, \
-            rename_marker, zoom_to_fit, set_zoom, toggle_view. \
+            Commands: \(CommandRegistry.commandList(for: "logic_navigate")). \
             Params by command: \
-            goto_bar -> { bar: Int }; \
-            goto_marker -> { index: Int } or { name: String }; \
             create_marker -> { name: String } (at current playhead); \
-            rename_marker -> { index: Int, name: String }; \
-            delete_marker -> { index: Int }; \
-            set_zoom -> { level: String } ("in", "out", "fit"); \
             toggle_view -> { view: String } ("mixer", "piano_roll", "score", \
             "step_editor", "event_list", "library", "inspector", "automation")
             """,
@@ -41,57 +35,17 @@ struct NavigateDispatcher {
         cache: StateCache
     ) async -> CallTool.Result {
         switch command {
-        case "goto_bar":
-            let bar = params["bar"]?.intValue ?? 1
-            let result = await router.route(
-                operation: "nav.goto_bar",
-                params: ["bar": String(bar)]
-            )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "goto_marker":
-            if let index = params["index"]?.intValue {
-                let result = await router.route(
-                    operation: "nav.goto_marker",
-                    params: ["index": String(index)]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-            }
-            if let name = params["name"]?.stringValue {
-                let markers = await cache.getMarkers()
-                if let marker = markers.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) {
-                    let result = await router.route(
-                        operation: "nav.goto_marker",
-                        params: ["index": String(marker.id)]
-                    )
-                    return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-                }
-                return CallTool.Result(content: [.text("No marker found matching '\(name)'")], isError: true)
-            }
-            return CallTool.Result(content: [.text("goto_marker requires 'index' or 'name' param")], isError: true)
-
         case "create_marker":
-            let name = params["name"]?.stringValue ?? "Marker"
+            if let error = CommandRegistry.validationError(tool: "logic_navigate", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let name = params["name"]?.stringValue,
+                  !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return CallTool.Result(content: [.text("create_marker requires a non-empty 'name' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "nav.create_marker",
                 params: ["name": name]
-            )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "delete_marker":
-            let index = params["index"]?.intValue ?? 0
-            let result = await router.route(
-                operation: "nav.delete_marker",
-                params: ["index": String(index)]
-            )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "rename_marker":
-            let index = params["index"]?.intValue ?? 0
-            let name = params["name"]?.stringValue ?? ""
-            let result = await router.route(
-                operation: "nav.rename_marker",
-                params: ["index": String(index), "name": name]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
@@ -99,35 +53,14 @@ struct NavigateDispatcher {
             let result = await router.route(operation: "nav.zoom_to_fit")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
-        case "set_zoom":
-            let level = params["level"]?.stringValue ?? "fit"
-            switch level {
-            case "in":
-                let result = await router.route(
-                    operation: "nav.set_zoom_level",
-                    params: ["level": "8"]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-            case "out":
-                let result = await router.route(
-                    operation: "nav.set_zoom_level",
-                    params: ["level": "2"]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-            case "fit":
-                let result = await router.route(operation: "nav.zoom_to_fit")
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-            default:
-                // Treat as numeric zoom level
-                let result = await router.route(
-                    operation: "nav.set_zoom_level",
-                    params: ["level": level]
-                )
-                return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-            }
-
         case "toggle_view":
-            let view = params["view"]?.stringValue ?? "mixer"
+            if let error = CommandRegistry.validationError(tool: "logic_navigate", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let view = params["view"]?.stringValue,
+                  !view.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return CallTool.Result(content: [.text("toggle_view requires a non-empty 'view' param")], isError: true)
+            }
             let operation: String
             switch view {
             case "mixer": operation = "view.toggle_mixer"
@@ -149,7 +82,7 @@ struct NavigateDispatcher {
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown navigate command: \(command). Available: goto_bar, goto_marker, create_marker, delete_marker, rename_marker, zoom_to_fit, set_zoom, toggle_view")],
+                content: [.text("Unknown navigate command: \(command). Available: create_marker, zoom_to_fit, toggle_view")],
                 isError: true
             )
         }

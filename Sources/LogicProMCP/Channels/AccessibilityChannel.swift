@@ -1,4 +1,5 @@
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 /// Channel that reads and mutates Logic Pro state via the macOS Accessibility API.
@@ -94,6 +95,16 @@ actor AccessibilityChannel: Channel {
         // MARK: - Project
         case "project.get_info":
             return getProjectInfo()
+        case "project.tag_imported_audio":
+            return await tagImportedAudio(params: params)
+        case "project.remove_ace_audio_delta_duplicate":
+            return await removeACEAudioDeltaDuplicate(params: params)
+        case "project.tag_ace_audio_delta":
+            return await tagACEAudioDelta(params: params)
+        case "project.read_ace_audio_delta_geometry":
+            return await readACEAudioDeltaGeometry(params: params)
+        case "project.read_ace_audio_placement_geometry":
+            return await readACEAudioPlacementGeometry(params: params)
         case "selection.get_state":
             return getSelectionState()
         case "context.get_state":
@@ -207,9 +218,14 @@ actor AccessibilityChannel: Channel {
         if headers.isEmpty {
             return .error("No track headers found — is a project open?")
         }
+        let projectIdentity = currentProjectIdentity()
         var tracks: [TrackState] = []
         for (index, header) in headers.enumerated() {
-            let track = AXValueExtractors.extractTrackState(from: header, index: index)
+            let track = AXValueExtractors.extractTrackState(
+                from: header,
+                index: index,
+                projectIdentity: projectIdentity
+            )
             tracks.append(track)
         }
         return encodeResult(tracks)
@@ -217,9 +233,14 @@ actor AccessibilityChannel: Channel {
 
     private func getSelectedTrack() -> ChannelResult {
         let headers = AXLogicProElements.allTrackHeaders()
+        let projectIdentity = currentProjectIdentity()
         for (index, header) in headers.enumerated() {
             if AXValueExtractors.extractSelectedState(header) == true {
-                let track = AXValueExtractors.extractTrackState(from: header, index: index)
+                let track = AXValueExtractors.extractTrackState(
+                    from: header,
+                    index: index,
+                    projectIdentity: projectIdentity
+                )
                 return encodeResult(track)
             }
         }
@@ -243,6 +264,15 @@ actor AccessibilityChannel: Channel {
         guard let indexStr = params["index"], let index = Int(indexStr) else {
             return .error("Missing or invalid 'index' parameter")
         }
+        guard let enabledString = params["enabled"]?.lowercased() else {
+            return .error("Missing 'enabled' parameter")
+        }
+        let enabled: Bool
+        switch enabledString {
+        case "true", "1": enabled = true
+        case "false", "0": enabled = false
+        default: return .error("Invalid 'enabled' parameter")
+        }
         let finder: (Int) -> AXUIElement? = switch buttonName {
         case "Mute": AXLogicProElements.findTrackMuteButton
         case "Solo": AXLogicProElements.findTrackSoloButton
@@ -252,10 +282,19 @@ actor AccessibilityChannel: Channel {
         guard let button = finder(index) else {
             return .error("Cannot find \(buttonName) button on track \(index)")
         }
-        guard AXHelpers.performAction(button, kAXPressAction) else {
-            return .error("Failed to click \(buttonName) on track \(index)")
+
+        guard let current = AXValueExtractors.extractButtonState(button) else {
+            return .error("Cannot verify current \(buttonName) state on track \(index); no mutation started")
         }
-        return .success("{\"track\":\(index),\"toggled\":\"\(buttonName)\"}")
+        if current != enabled {
+            guard AXHelpers.performAction(button, kAXPressAction) else {
+                return .error("Failed to click \(buttonName) on track \(index)")
+            }
+        }
+        guard let observed = AXValueExtractors.extractButtonState(button), observed == enabled else {
+            return .error("Unable to verify \(buttonName)=\(enabled) on track \(index); result is unknown")
+        }
+        return .success("{\"track\":\(index),\"\(buttonName.lowercased())\":\(enabled),\"verification\":\"direct_readback\"}")
     }
 
     private func renameTrack(params: [String: String]) -> ChannelResult {
@@ -273,6 +312,318 @@ actor AccessibilityChannel: Channel {
         return .success("{\"track\":\(index),\"name\":\"\(name)\"}")
     }
 
+    /// Attach the explicit operation tags after the import dispatch. The row
+    /// indices here are used only as a bounded precondition for the newly
+    /// created selected track; they are never returned as stable identity.
+    private func tagImportedAudio(params: [String: String]) async -> ChannelResult {
+        guard let beforeTrackCount = params["before_track_count"].flatMap(Int.init),
+              let beforeRegionCount = params["before_region_count"].flatMap(Int.init),
+              beforeTrackCount >= 0,
+              beforeRegionCount >= 0,
+              let trackTag = params["track_tag"],
+              OperationTagIdentity.operationTag(in: trackTag) == trackTag,
+              let regionTag = params["region_tag"],
+              OperationTagIdentity.operationTag(in: regionTag) == regionTag,
+              let assetSHA256 = params["asset_sha256"],
+              ACEFileDigest.isSHA256(assetSHA256),
+              let nativeSourceBasename = params["native_source_basename"],
+              !nativeSourceBasename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return taggingFailure(
+                "project.tag_imported_audio requires validated counts, operation tags, source digest, and native source basename",
+                outcome: "not_started"
+            )
+        }
+        let keeperDigestReceiptID = params["keeper_digest_receipt_id"]
+        let deadline = Date().addingTimeInterval(ServerConfig.aceAudioTaggingTimeout)
+        var lastIssue = "new imported track is not yet visible"
+
+        while Date() < deadline {
+            let headers = AXLogicProElements.allTrackHeaders()
+            let rows = AXLogicProElements.allTrackContentRows()
+            let selectedTracks = headers.enumerated().filter {
+                AXValueExtractors.extractSelectedState($0.element) == true
+            }
+
+            guard selectedTracks.count <= 1 else {
+                return taggingFailure("imported track selection is ambiguous; no tag write started", outcome: "not_started")
+            }
+            guard let selectedTrack = selectedTracks.first else {
+                lastIssue = "imported track is not selected; no tag write started"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+
+            let trackIndex = selectedTrack.offset
+            guard trackIndex >= beforeTrackCount else {
+                return taggingFailure("selected track is an existing visible-order row; no tag write started", outcome: "not_started")
+            }
+            guard trackIndex < rows.count else {
+                lastIssue = "selected imported track has no visible content row yet"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+
+            let regionItems = AXHelpers.getChildren(rows[trackIndex]).filter {
+                AXHelpers.getRole($0) == "AXLayoutItem"
+            }
+            let visibleRegionCount = rows.reduce(into: 0) { count, row in
+                count += AXHelpers.getChildren(row).filter {
+                    AXHelpers.getRole($0) == "AXLayoutItem"
+                }.count
+            }
+            guard visibleRegionCount <= beforeRegionCount + 1 else {
+                return taggingFailure("import produced more than one visible region; no tag write started", outcome: "not_started")
+            }
+            guard visibleRegionCount == beforeRegionCount + 1,
+                  regionItems.count == 1 else {
+                lastIssue = "new imported region is not yet visible as one layer"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+
+            let projectIdentity = currentProjectIdentity()
+            let currentTrack = AXValueExtractors.extractTrackState(
+                from: selectedTrack.element,
+                index: trackIndex,
+                projectIdentity: projectIdentity
+            )
+            let currentRegion = AXValueExtractors.extractRegions(
+                from: rows[trackIndex],
+                trackIndex: trackIndex,
+                trackName: currentTrack.name,
+                projectIdentity: projectIdentity
+            ).first(where: { $0.name == nativeSourceBasename })
+            guard currentRegion != nil else {
+                lastIssue = "new imported region does not expose the exact native source basename; no region rename started"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+            guard let trackField = AXLogicProElements.findTrackNameField(
+                trackIndex: trackIndex,
+                currentName: currentTrack.name
+            ) else {
+                lastIssue = "new imported track name field is unavailable; no region rename started"
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+
+            guard setAndConfirmName(
+                trackField,
+                name: trackTag,
+                expectedCurrentName: currentTrack.name,
+                trackIndex: trackIndex
+            ) else {
+                return taggingFailure(
+                    "operation track tag could not be written and verified; no region rename was issued; import remains dispatched",
+                    outcome: "unknown"
+                )
+            }
+
+            let verifiedHeaders = AXLogicProElements.allTrackHeaders()
+            let verifiedRows = AXLogicProElements.allTrackContentRows()
+            guard trackIndex < verifiedHeaders.count,
+                  trackIndex < verifiedRows.count else {
+                return taggingFailure("tagged layer disappeared during readback; import remains dispatched", outcome: "unknown")
+            }
+            let verifiedProjectIdentity = currentProjectIdentity()
+            let verifiedTrack = AXValueExtractors.extractTrackState(
+                from: verifiedHeaders[trackIndex],
+                index: trackIndex,
+                projectIdentity: verifiedProjectIdentity
+            )
+            let verifiedRegions = AXValueExtractors.extractRegions(
+                from: verifiedRows[trackIndex],
+                trackIndex: trackIndex,
+                trackName: verifiedTrack.name,
+                projectIdentity: verifiedProjectIdentity,
+                trackStableID: verifiedTrack.stableID
+            )
+            guard verifiedTrack.name == trackTag,
+                  verifiedTrack.stableID != nil,
+                  verifiedRegions.count == 1,
+                  verifiedRegions[0].name == nativeSourceBasename,
+                  verifiedRegions[0].trackStableID == verifiedTrack.stableID else {
+                return taggingFailure(
+                    "operation track tag did not produce unique parent-track readback for the exact native source basename; no region rename was issued; import remains dispatched",
+                    outcome: "unknown"
+                )
+            }
+
+            return encodeResult([
+                "stage": ACEAudioPlacementContract.importStageTagging,
+                "status": "completed",
+                "outcome": "tagged",
+                "verification": "direct_readback",
+                "identity_scope": "temporary_selection_precondition_only",
+                "track_tag": trackTag,
+                "region_tag": regionTag,
+                "asset_sha256": assetSHA256,
+                "native_source_basename": nativeSourceBasename,
+                "keeper_digest_receipt_id": keeperDigestReceiptID ?? "",
+                "region_name_mutation": "not_issued",
+            ])
+        }
+
+        return taggingFailure(
+            "\(lastIssue); bounded tag-readback wait expired and import remains dispatched",
+            status: "timed_out",
+            outcome: "unknown"
+        )
+    }
+
+    private func taggingFailure(
+        _ detail: String,
+        status: String = "failed",
+        outcome: String
+    ) -> ChannelResult {
+        .error(
+            "stage=\(ACEAudioPlacementContract.importStageTagging) status=\(status) outcome=\(outcome) detail=\(detail.replacingOccurrences(of: "\n", with: " "))"
+        )
+    }
+
+    private func setAndConfirmName(
+        _ field: AXUIElement,
+        name: String,
+        expectedCurrentName: String,
+        trackIndex: Int
+    ) -> Bool {
+        // Logic's AX text field exposes only AXPress and is not writable via
+        // AXValue. Its help says to double-click; use one physical double-click
+        // and one bounded keyboard replacement, then verify the parent track.
+        guard ProcessUtils.activateLogicPro(),
+              let fieldFrame = AXHelpers.frame(of: field),
+              fieldFrame.width > 0,
+              fieldFrame.height > 0,
+              let source = CGEventSource(stateID: .hidSystemState) else {
+            return false
+        }
+        let fieldRect = CGRect(
+            x: fieldFrame.x,
+            y: fieldFrame.y,
+            width: fieldFrame.width,
+            height: fieldFrame.height
+        )
+        var displayCount: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &displayCount) == .success,
+              displayCount > 0 else {
+            return false
+        }
+        var displayIDs = Array(repeating: CGDirectDisplayID(0), count: Int(displayCount))
+        guard CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount) == .success else {
+            return false
+        }
+        let visibleFrames = displayIDs.compactMap { displayID -> CGRect? in
+            let intersection = CGDisplayBounds(displayID).intersection(fieldRect)
+            return intersection.width > 0 && intersection.height > 0 ? intersection : nil
+        }
+        guard let visibleFrame = visibleFrames.max(by: {
+            ($0.width * $0.height) < ($1.width * $1.height)
+        }) else {
+            return false
+        }
+        let point = CGPoint(
+            x: visibleFrame.minX + min(20.0, visibleFrame.width / 2.0),
+            y: visibleFrame.midY
+        )
+        guard postTrackNameMouseClick(source, at: point, clickState: 1) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+        guard postTrackNameMouseClick(source, at: point, clickState: 2) else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+        guard let app = AXLogicProElements.appRoot(),
+              let focusedField: AXUIElement = AXHelpers.getAttribute(app, kAXFocusedUIElementAttribute),
+              AXHelpers.getRole(focusedField) == kAXTextFieldRole else {
+            return false
+        }
+        let focusedNames = [
+            AXValueExtractors.extractTextValue(focusedField),
+            AXHelpers.getDescription(focusedField),
+            AXHelpers.getTitle(focusedField),
+        ].compactMap { $0 }
+        guard focusedNames.contains(expectedCurrentName) else {
+            return false
+        }
+        postTrackNameKey(source, keyCode: 0, flags: .maskCommand)
+        postTrackNameText(source, text: name)
+        postTrackNameKey(source, keyCode: 36)
+        for attempt in 0..<12 {
+            let headers = AXLogicProElements.allTrackHeaders()
+            if trackIndex < headers.count {
+                let projectIdentity = currentProjectIdentity()
+                let observedTrack = AXValueExtractors.extractTrackState(
+                    from: headers[trackIndex],
+                    index: trackIndex,
+                    projectIdentity: projectIdentity
+                )
+                if observedTrack.name == name {
+                    return true
+                }
+            }
+            if attempt < 11 {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        return false
+    }
+
+    private func postTrackNameMouseClick(
+        _ source: CGEventSource,
+        at point: CGPoint,
+        clickState: Int64
+    ) -> Bool {
+        guard let down = CGEvent(
+            mouseEventSource: source,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ), let up = CGEvent(
+            mouseEventSource: source,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ) else {
+            return false
+        }
+        down.setIntegerValueField(.mouseEventClickState, value: clickState)
+        up.setIntegerValueField(.mouseEventClickState, value: clickState)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        return true
+    }
+
+    private func postTrackNameKey(
+        _ source: CGEventSource,
+        keyCode: CGKeyCode,
+        flags: CGEventFlags = []
+    ) {
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            return
+        }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
+    private func postTrackNameText(_ source: CGEventSource, text: String) {
+        var unicode = Array(text.utf16)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+            return
+        }
+        unicode.withUnsafeMutableBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
+            up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
+        }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
     // MARK: - Mixer
 
     private enum MixerTarget {
@@ -284,8 +635,13 @@ actor AccessibilityChannel: Channel {
 
     private func getRegions(params: [String: String]) -> ChannelResult {
         let contentRows = AXLogicProElements.allTrackContentRows()
+        let projectIdentity = currentProjectIdentity()
         let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
-            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+            AXValueExtractors.extractTrackState(
+                from: $0.element,
+                index: $0.offset,
+                projectIdentity: projectIdentity
+            )
         }
 
         if contentRows.isEmpty || tracks.isEmpty {
@@ -304,7 +660,9 @@ actor AccessibilityChannel: Channel {
             regions.append(contentsOf: AXValueExtractors.extractRegions(
                 from: row,
                 trackIndex: index,
-                trackName: track.name
+                trackName: track.name,
+                projectIdentity: projectIdentity,
+                trackStableID: track.stableID
             ))
         }
 
@@ -385,6 +743,12 @@ actor AccessibilityChannel: Channel {
         let rawTitle = AXHelpers.getTitle(window) ?? "Unknown"
         var info = ProjectInfo()
         info.name = Self.normalizedProjectTitle(rawTitle)
+        if let observed = observedAXDocument(for: window) {
+            info.filePath = observed.path
+            info.projectIdentity = observed.projectIdentity
+        } else {
+            info.projectIdentity = .visibleOnly(name: info.name)
+        }
         info.trackCount = AXLogicProElements.allTrackHeaders().count
         if let transport = AXLogicProElements.getTransportBar(),
            let tempo = AXValueExtractors.extractTempoValue(from: transport) {
@@ -398,8 +762,13 @@ actor AccessibilityChannel: Channel {
     }
 
     private func getSelectionState() -> ChannelResult {
+        let projectIdentity = currentProjectIdentity()
         let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
-            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+            AXValueExtractors.extractTrackState(
+                from: $0.element,
+                index: $0.offset,
+                projectIdentity: projectIdentity
+            )
         }
         let contentRows = AXLogicProElements.allTrackContentRows()
 
@@ -413,13 +782,25 @@ actor AccessibilityChannel: Channel {
         for (index, row) in contentRows.enumerated() {
             guard index < tracks.count else { continue }
             let track = tracks[index]
-            let regions = AXValueExtractors.extractRegions(from: row, trackIndex: index, trackName: track.name)
+            let regions = AXValueExtractors.extractRegions(
+                from: row,
+                trackIndex: index,
+                trackName: track.name,
+                projectIdentity: projectIdentity,
+                trackStableID: track.stableID
+            )
             selectedRegions.append(contentsOf: regions.filter(\ .isSelected))
         }
 
         selection.selectedRegionIDs = selectedRegions.map(\ .id)
         selection.selectedRegionNames = selectedRegions.map(\ .name)
         selection.selectedRegionCount = selectedRegions.count
+        if !selectedRegions.isEmpty {
+            selection.selectedRegionIdentityStability = .synthetic
+            selection.identityScope = "visible_only"
+            selection.identityNote = "AX selection IDs are synthetic and derived from visible track order; they cannot authorize destructive mutation."
+        }
+        selection.projectIdentity = projectIdentity
         selection.lastUpdated = Date()
         return encodeResult(selection)
     }
@@ -429,13 +810,24 @@ actor AccessibilityChannel: Channel {
             return .error("Cannot locate Logic Pro main window")
         }
         let rawTitle = AXHelpers.getTitle(window) ?? "Unknown"
+        let projectIdentity = currentProjectIdentity()
         let tracks = AXLogicProElements.allTrackHeaders().enumerated().map {
-            AXValueExtractors.extractTrackState(from: $0.element, index: $0.offset)
+            AXValueExtractors.extractTrackState(
+                from: $0.element,
+                index: $0.offset,
+                projectIdentity: projectIdentity
+            )
         }
         let regions = AXLogicProElements.allTrackContentRows().enumerated().flatMap { index, row in
             guard index < tracks.count else { return [RegionState]() }
             let track = tracks[index]
-            return AXValueExtractors.extractRegions(from: row, trackIndex: index, trackName: track.name)
+            return AXValueExtractors.extractRegions(
+                from: row,
+                trackIndex: index,
+                trackName: track.name,
+                projectIdentity: projectIdentity,
+                trackStableID: track.stableID
+            )
         }
 
         let context = ContextState(
@@ -444,9 +836,26 @@ actor AccessibilityChannel: Channel {
             activeView: Self.activeViewName(rawTitle),
             visibleTrackCount: tracks.count,
             visibleRegionCount: regions.count,
-            lastUpdated: Date()
+            lastUpdated: Date(),
+            projectIdentity: projectIdentity
         )
         return encodeResult(context)
+    }
+
+    private func currentProjectIdentity() -> ProjectIdentity {
+        guard let window = AXLogicProElements.mainWindow() else { return .unknown }
+        if let observed = observedAXDocument(for: window) {
+            return observed.projectIdentity
+        }
+        let title = AXHelpers.getTitle(window) ?? "Unknown"
+        return .visibleOnly(name: Self.normalizedProjectTitle(title))
+    }
+
+    private func observedAXDocument(for fallbackWindow: AXUIElement) -> ResolvedAXDocument? {
+        guard let window = AXLogicProElements.frontProjectWindow() else { return nil }
+        let document = AXHelpers.getDocumentURLString(window)
+        let title = AXHelpers.getTitle(window) ?? AXHelpers.getTitle(fallbackWindow)
+        return AXDocumentProjectResolver.resolve(document: document, windowTitle: title)
     }
 
     private func getEditorState() -> ChannelResult {

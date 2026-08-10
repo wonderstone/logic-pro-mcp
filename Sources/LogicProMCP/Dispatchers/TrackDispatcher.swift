@@ -6,13 +6,11 @@ struct TrackDispatcher {
         name: "logic_tracks",
         description: """
             Track actions in Logic Pro. \
-            Commands: select, create_audio, create_instrument, create_drummer, \
-            create_external_midi, delete, duplicate, rename, mute, solo, arm, set_color. \
+            Commands: \(CommandRegistry.commandList(for: "logic_tracks")). \
             Params by command: \
             select -> { index: Int } or { name: String }; \
             rename -> { index: Int, name: String }; \
             mute/solo/arm -> { index: Int, enabled: Bool }; \
-            set_color -> { index: Int, color: Int } (Logic color index 0-24); \
             create_* -> {} (creates at current position); \
             delete/duplicate -> { index: Int }
             """,
@@ -40,7 +38,13 @@ struct TrackDispatcher {
     ) async -> CallTool.Result {
         switch command {
         case "select":
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
             if let index = params["index"]?.intValue {
+                guard index >= 0 else {
+                    return CallTool.Result(content: [.text("select requires a non-negative 'index' param")], isError: true)
+                }
                 let result = await router.route(
                     operation: "track.select",
                     params: ["index": String(index)]
@@ -73,39 +77,49 @@ struct TrackDispatcher {
             let result = await router.route(operation: "track.create_drummer")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
-        case "create_external_midi":
-            let result = await router.route(operation: "track.create_external_midi")
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
         case "delete":
-            if let index = params["index"]?.intValue {
-                let result = await router.route(
-                    operation: "track.select",
-                    params: ["index": String(index)]
-                )
-                guard result.isSuccess else {
-                    return CallTool.Result(content: [.text(result.message)], isError: true)
-                }
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0 else {
+                return CallTool.Result(content: [.text("delete requires a non-negative 'index' param")], isError: true)
+            }
+            let selectResult = await router.route(
+                operation: "track.select",
+                params: ["index": String(index)]
+            )
+            guard selectResult.isSuccess else {
+                return CallTool.Result(content: [.text(selectResult.message)], isError: true)
             }
             let result = await router.route(operation: "track.delete")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "duplicate":
-            if let index = params["index"]?.intValue {
-                let selectResult = await router.route(
-                    operation: "track.select",
-                    params: ["index": String(index)]
-                )
-                guard selectResult.isSuccess else {
-                    return CallTool.Result(content: [.text(selectResult.message)], isError: true)
-                }
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0 else {
+                return CallTool.Result(content: [.text("duplicate requires a non-negative 'index' param")], isError: true)
+            }
+            let selectResult = await router.route(
+                operation: "track.select",
+                params: ["index": String(index)]
+            )
+            guard selectResult.isSuccess else {
+                return CallTool.Result(content: [.text(selectResult.message)], isError: true)
             }
             let result = await router.route(operation: "track.duplicate")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "rename":
-            let index = params["index"]?.intValue ?? 0
-            let name = params["name"]?.stringValue ?? ""
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0,
+                  let name = params["name"]?.stringValue,
+                  !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return CallTool.Result(content: [.text("rename requires a non-negative 'index' and non-empty 'name'")], isError: true)
+            }
             let result = await router.route(
                 operation: "track.rename",
                 params: ["index": String(index), "name": name]
@@ -113,44 +127,50 @@ struct TrackDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "mute":
-            let index = params["index"]?.intValue ?? 0
-            let enabled = params["enabled"]?.boolValue ?? true
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0,
+                  let enabled = params["enabled"]?.boolValue else {
+                return CallTool.Result(content: [.text("mute requires a non-negative 'index' and 'enabled' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "track.set_mute",
-                params: ["index": String(index), "muted": String(enabled)]
+                params: ["index": String(index), "muted": String(enabled), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "solo":
-            let index = params["index"]?.intValue ?? 0
-            let enabled = params["enabled"]?.boolValue ?? true
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0,
+                  let enabled = params["enabled"]?.boolValue else {
+                return CallTool.Result(content: [.text("solo requires a non-negative 'index' and 'enabled' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "track.set_solo",
-                params: ["index": String(index), "soloed": String(enabled)]
+                params: ["index": String(index), "soloed": String(enabled), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "arm":
-            let index = params["index"]?.intValue ?? 0
-            let enabled = params["enabled"]?.boolValue ?? true
+            if let error = CommandRegistry.validationError(tool: "logic_tracks", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
+            guard let index = params["index"]?.intValue, index >= 0,
+                  let enabled = params["enabled"]?.boolValue else {
+                return CallTool.Result(content: [.text("arm requires a non-negative 'index' and 'enabled' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "track.set_arm",
-                params: ["index": String(index), "armed": String(enabled)]
-            )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
-        case "set_color":
-            let index = params["index"]?.intValue ?? 0
-            let color = params["color"]?.intValue ?? 0
-            let result = await router.route(
-                operation: "track.set_color",
-                params: ["index": String(index), "color": String(color)]
+                params: ["index": String(index), "armed": String(enabled), "enabled": String(enabled)]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         default:
             return CallTool.Result(
-                content: [.text("Unknown track command: \(command). Available: select, create_audio, create_instrument, create_drummer, create_external_midi, delete, duplicate, rename, mute, solo, arm, set_color")],
+                content: [.text("Unknown track command: \(command). Available: select, create_audio, create_instrument, create_drummer, delete, duplicate, rename, mute, solo, arm")],
                 isError: true
             )
         }

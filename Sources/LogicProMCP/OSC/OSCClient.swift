@@ -19,19 +19,26 @@ actor OSCClient {
 
         let params = NWParameters.udp
         let conn = NWConnection(host: host, port: port, using: params)
+        let readinessGate = OSCConnectionReadinessGate()
 
         let readyResult: Bool = await withCheckedContinuation { continuation in
             conn.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
                     Task { await self?.setReady(true) }
-                    continuation.resume(returning: true)
+                    if readinessGate.claim() {
+                        continuation.resume(returning: true)
+                    }
                 case .failed(let error):
                     Log.error("OSCClient connection failed: \(error)", subsystem: "osc")
-                    continuation.resume(returning: false)
+                    if readinessGate.claim() {
+                        continuation.resume(returning: false)
+                    }
                 case .cancelled:
                     Log.info("OSCClient connection cancelled", subsystem: "osc")
-                    continuation.resume(returning: false)
+                    if readinessGate.claim() {
+                        continuation.resume(returning: false)
+                    }
                 default:
                     break
                 }
@@ -79,6 +86,22 @@ actor OSCClient {
 
     private func setReady(_ value: Bool) {
         isReady = value
+    }
+}
+
+/// NWConnection can report a terminal state after it has already reported ready.
+/// Keep the checked continuation single-shot across that ready-to-cancel path.
+final class OSCConnectionReadinessGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resolved = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !resolved else { return false }
+        resolved = true
+        return true
     }
 }
 

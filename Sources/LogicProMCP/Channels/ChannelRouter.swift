@@ -108,8 +108,14 @@ actor ChannelRouter {
         "project.save_as":            [.cgEvent],
         "project.close":              [.cgEvent, .appleScript],
         "project.get_info":           [.accessibility],
+        "project.tag_imported_audio": [.accessibility],
+        "project.remove_ace_audio_delta_duplicate": [.accessibility],
+        "project.tag_ace_audio_delta": [.accessibility],
+        "project.read_ace_audio_delta_geometry": [.accessibility],
+        "project.read_ace_audio_placement_geometry": [.accessibility],
         "project.bounce":             [.cgEvent, .accessibility],
         "project.silent_bounce":      [],  // Handled directly via osascript subprocess
+        "project.import_audio":       [.appleScript],
         "project.is_running":         [],  // No channel needed — pure process check
 
         // Editor
@@ -176,6 +182,13 @@ actor ChannelRouter {
     }
 
     // MARK: - Routing
+
+    /// Whether an operation is part of the registered routing contract.
+    /// Kept as a read-only surface so the public command registry can be parity-tested
+    /// without starting Logic Pro or any communication channel.
+    static func hasRoute(for operation: String) -> Bool {
+        routingTable[operation] != nil
+    }
 
     /// Route an operation through its fallback chain.
     /// Returns the result from the first channel that succeeds.

@@ -14,13 +14,10 @@ struct TransportDispatcher {
         name: "logic_transport",
         description: """
             Control Logic Pro transport. \
-            Commands: play, stop, record, pause, rewind, fast_forward, \
-            toggle_cycle, toggle_metronome, set_tempo, goto_position, \
-            set_cycle_range, toggle_count_in. \
+            Commands: \(CommandRegistry.commandList(for: "logic_transport")). \
             Params by command: \
             set_tempo -> { tempo: Float } (20.0-999.0); \
             goto_position -> { bar: Int } or { time: "HH:MM:SS:FF" }; \
-            set_cycle_range -> { start: Int, end: Int } (bar numbers); \
             Others -> {} (no params)
             """,
         inputSchema: .object([
@@ -78,12 +75,14 @@ struct TransportDispatcher {
             let result = await router.route(operation: "transport.toggle_metronome")
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
-        case "toggle_count_in":
-            let result = await router.route(operation: "transport.toggle_count_in")
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
         case "set_tempo":
+            if let error = CommandRegistry.validationError(tool: "logic_transport", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
             let tempo = parseTempo(from: params)
+            guard (20.0...999.0).contains(tempo) else {
+                return CallTool.Result(content: [.text("set_tempo requires a value from 20.0 through 999.0")], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.set_tempo",
                 params: ["tempo": String(tempo), "bpm": String(tempo)]
@@ -91,34 +90,32 @@ struct TransportDispatcher {
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
         case "goto_position":
+            if let error = CommandRegistry.validationError(tool: "logic_transport", command: command, params: params) {
+                return CallTool.Result(content: [.text(error)], isError: true)
+            }
             if let bar = params["bar"]?.intValue {
+                guard bar > 0 else {
+                    return CallTool.Result(content: [.text("goto_position requires a positive 'bar' param")], isError: true)
+                }
                 let result = await router.route(
                     operation: "transport.goto_position",
                     params: ["position": "\(bar).1.1.1"]
                 )
                 return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
             }
-            let time = params["time"]?.stringValue
-                ?? params["position"]?.stringValue
-                ?? "1.1.1.1"
+            let time = params["time"]?.stringValue ?? params["position"]?.stringValue ?? ""
+            guard !time.isEmpty else {
+                return CallTool.Result(content: [.text("goto_position requires a non-empty 'time' or 'position' param")], isError: true)
+            }
             let result = await router.route(
                 operation: "transport.goto_position",
                 params: ["position": time]
             )
             return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
 
-        case "set_cycle_range":
-            let start = params["start"]?.intValue ?? 1
-            let end = params["end"]?.intValue ?? 5
-            let result = await router.route(
-                operation: "transport.set_cycle_range",
-                params: ["start": "\(start).1.1.1", "end": "\(end).1.1.1"]
-            )
-            return CallTool.Result(content: [.text(result.message)], isError: !result.isSuccess)
-
         default:
             return CallTool.Result(
-                content: [.text("Unknown transport command: \(command). Available: play, stop, record, pause, rewind, fast_forward, toggle_cycle, toggle_metronome, set_tempo, goto_position, set_cycle_range, toggle_count_in")],
+                content: [.text("Unknown transport command: \(command). Available: play, stop, record, pause, rewind, fast_forward, toggle_cycle, toggle_metronome, set_tempo, goto_position")],
                 isError: true
             )
         }

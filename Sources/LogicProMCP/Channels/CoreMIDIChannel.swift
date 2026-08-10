@@ -23,11 +23,11 @@ actor CoreMIDIChannel: Channel {
         switch operation {
         // MARK: - Transport (MMC)
 
-        case "transport.play":
+        case "transport.play", "mmc.play":
             await engine.sendSysEx(MMCCommands.play())
             return .success("MMC play sent")
 
-        case "transport.stop":
+        case "transport.stop", "mmc.stop":
             await engine.sendSysEx(MMCCommands.stop())
             return .success("MMC stop sent")
 
@@ -35,7 +35,7 @@ actor CoreMIDIChannel: Channel {
             await engine.sendSysEx(MMCCommands.pause())
             return .success("MMC pause sent")
 
-        case "transport.record_strobe":
+        case "transport.record_strobe", "mmc.record_strobe":
             await engine.sendSysEx(MMCCommands.recordStrobe())
             return .success("MMC record strobe sent")
 
@@ -65,16 +65,37 @@ actor CoreMIDIChannel: Channel {
         // MARK: - Note Send
 
         case "midi.send_note":
-            guard let note = params["note"].flatMap(UInt8.init) else {
-                return .error("send_note requires 'note' (0-127)")
+            guard let note = params["note"].flatMap(UInt8.init), note <= 127,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15,
+                  let velocity = params["velocity"].flatMap(UInt8.init), velocity <= 127,
+                  let durationMs = params["duration_ms"].flatMap(UInt64.init) else {
+                return .error("send_note requires note/velocity 0-127, channel 0-15, and duration_ms")
             }
-            let channel = params["channel"].flatMap(UInt8.init) ?? 0
-            let velocity = params["velocity"].flatMap(UInt8.init) ?? 100
-            let durationMs = params["duration_ms"].flatMap(UInt64.init) ?? 250
             await engine.sendNoteOn(channel: channel, note: note, velocity: velocity)
             try? await Task.sleep(nanoseconds: durationMs * 1_000_000)
             await engine.sendNoteOff(channel: channel, note: note)
             return .success("Note \(note) on ch \(channel) vel \(velocity) dur \(durationMs)ms")
+
+        case "midi.send_chord":
+            guard let notesString = params["notes"],
+                  let velocity = params["velocity"].flatMap(UInt8.init), velocity <= 127,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15,
+                  let durationMs = params["duration_ms"].flatMap(UInt64.init) else {
+                return .error("send_chord requires notes, velocity 0-127, channel 0-15, and duration_ms")
+            }
+            let parts = notesString.split(separator: ",")
+            let notes = parts.compactMap { UInt8($0.trimmingCharacters(in: .whitespaces)) }
+            guard !parts.isEmpty, notes.count == parts.count, notes.allSatisfy({ $0 <= 127 }) else {
+                return .error("send_chord requires comma-separated notes in the range 0-127")
+            }
+            for note in notes {
+                await engine.sendNoteOn(channel: channel, note: note, velocity: velocity)
+            }
+            try? await Task.sleep(nanoseconds: durationMs * 1_000_000)
+            for note in notes {
+                await engine.sendNoteOff(channel: channel, note: note)
+            }
+            return .success("Chord \(notes.map(String.init).joined(separator: ",")) on ch \(channel) dur \(durationMs)ms")
 
         case "midi.note_on":
             guard let note = params["note"].flatMap(UInt8.init) else {
@@ -97,40 +118,41 @@ actor CoreMIDIChannel: Channel {
 
         case "midi.send_cc":
             guard let controller = params["controller"].flatMap(UInt8.init),
-                  let value = params["value"].flatMap(UInt8.init) else {
-                return .error("send_cc requires 'controller' and 'value' (0-127)")
+                  controller <= 127,
+                  let value = params["value"].flatMap(UInt8.init), value <= 127,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15 else {
+                return .error("send_cc requires controller/value 0-127 and channel 0-15")
             }
-            let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendCC(channel: channel, controller: controller, value: value)
             return .success("CC \(controller)=\(value) on ch \(channel)")
 
         // MARK: - Program Change
 
-        case "midi.program_change":
-            guard let program = params["program"].flatMap(UInt8.init) else {
-                return .error("program_change requires 'program' (0-127)")
+        case "midi.send_program_change", "midi.program_change":
+            guard let program = params["program"].flatMap(UInt8.init), program <= 127,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15 else {
+                return .error("send_program_change requires program 0-127 and channel 0-15")
             }
-            let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendProgramChange(channel: channel, program: program)
             return .success("Program change \(program) on ch \(channel)")
 
         // MARK: - Pitch Bend
 
-        case "midi.pitch_bend":
-            guard let value = params["value"].flatMap(UInt16.init) else {
-                return .error("pitch_bend requires 'value' (0-16383, center=8192)")
+        case "midi.send_pitch_bend", "midi.pitch_bend":
+            guard let value = params["value"].flatMap(UInt16.init), value <= 16383,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15 else {
+                return .error("send_pitch_bend requires value 0-16383 and channel 0-15")
             }
-            let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendPitchBend(channel: channel, value: value)
             return .success("Pitch bend \(value) on ch \(channel)")
 
         // MARK: - Aftertouch
 
-        case "midi.aftertouch":
-            guard let pressure = params["pressure"].flatMap(UInt8.init) else {
-                return .error("aftertouch requires 'pressure' (0-127)")
+        case "midi.send_aftertouch", "midi.aftertouch":
+            guard let pressure = params["value"].flatMap(UInt8.init), pressure <= 127,
+                  let channel = params["channel"].flatMap(UInt8.init), channel <= 15 else {
+                return .error("send_aftertouch requires value 0-127 and channel 0-15")
             }
-            let channel = params["channel"].flatMap(UInt8.init) ?? 0
             await engine.sendAftertouch(channel: channel, pressure: pressure)
             return .success("Aftertouch \(pressure) on ch \(channel)")
 
@@ -140,7 +162,11 @@ actor CoreMIDIChannel: Channel {
             guard let hexString = params["bytes"] else {
                 return .error("send_sysex requires 'bytes' (hex string, e.g. 'F0 7F 7F 06 02 F7')")
             }
-            let bytes = hexString.split(separator: " ").compactMap { UInt8($0, radix: 16) }
+            let tokens = hexString.split(whereSeparator: { $0 == " " || $0 == "," })
+            let bytes = tokens.compactMap { UInt8($0, radix: 16) }
+            guard bytes.count == tokens.count else {
+                return .error("send_sysex contains an invalid hexadecimal byte")
+            }
             guard bytes.first == 0xF0, bytes.last == 0xF7 else {
                 return .error("SysEx must start with F0 and end with F7")
             }
